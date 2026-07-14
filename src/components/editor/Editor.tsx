@@ -7,6 +7,7 @@ import { TopBar } from "./TopBar";
 import { ToolRail } from "./ToolRail";
 import { LayersPanel } from "./LayersPanel";
 import { PropertiesPanel } from "./PropertiesPanel";
+import { AgentPanel } from "./AgentPanel";
 
 export default function Editor() {
   const editor = useEditor();
@@ -100,6 +101,9 @@ export default function Editor() {
           onReorder={editor.reorderLayer}
         />
       </aside>
+
+      {/* AI assistant chat */}
+      <AgentPanel editor={editor} />
 
       {/* Zoom pill */}
       <div className="pointer-events-auto absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-slate-800/60 bg-zinc-900/60 p-1 shadow-2xl shadow-black/40 backdrop-blur-xl">

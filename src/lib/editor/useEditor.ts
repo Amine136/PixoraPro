@@ -24,6 +24,12 @@ import {
 import { toast } from "sonner";
 import {
   ARTBOARD_PRESETS,
+  type AgentAlignOptions,
+  type AgentCanvasState,
+  type AgentLayerPatch,
+  type AgentLayerSnapshot,
+  type AgentShapeOptions,
+  type AgentTextOptions,
   type ArtboardPreset,
   type BrushSettings,
   type ImageAdjustments,
@@ -114,15 +120,43 @@ function makeThumb(img: FabricImage): string | undefined {
 }
 
 function readAdjustments(img: FabricImage): ImageAdjustments {
-  let brightness = 0;
-  let contrast = 0;
-  let saturation = 0;
+  const adj: ImageAdjustments = {
+    brightness: 0,
+    contrast: 0,
+    saturation: 0,
+    blur: 0,
+    grayscale: false,
+    sepia: false,
+    hueRotate: 0,
+  };
   for (const f of img.filters ?? []) {
-    if (f instanceof filters.Brightness) brightness = f.brightness;
-    else if (f instanceof filters.Contrast) contrast = f.contrast;
-    else if (f instanceof filters.Saturation) saturation = f.saturation;
+    if (f instanceof filters.Brightness) adj.brightness = f.brightness;
+    else if (f instanceof filters.Contrast) adj.contrast = f.contrast;
+    else if (f instanceof filters.Saturation) adj.saturation = f.saturation;
+    else if (f instanceof filters.Blur) adj.blur = f.blur;
+    else if (f instanceof filters.Grayscale) adj.grayscale = true;
+    else if (f instanceof filters.Sepia) adj.sepia = true;
+    else if (f instanceof filters.HueRotation) adj.hueRotate = f.rotation;
   }
-  return { brightness, contrast, saturation };
+  return adj;
+}
+
+/** Both adjustment paths (UI sliders and agent tool) rebuild the full filter
+ *  list from one merged state so neither wipes the other's filters. */
+function buildFilterList(next: ImageAdjustments) {
+  const list = [];
+  if (next.brightness !== 0)
+    list.push(new filters.Brightness({ brightness: next.brightness }));
+  if (next.contrast !== 0)
+    list.push(new filters.Contrast({ contrast: next.contrast }));
+  if (next.saturation !== 0)
+    list.push(new filters.Saturation({ saturation: next.saturation }));
+  if (next.blur !== 0) list.push(new filters.Blur({ blur: next.blur }));
+  if (next.grayscale) list.push(new filters.Grayscale());
+  if (next.sepia) list.push(new filters.Sepia());
+  if (next.hueRotate !== 0)
+    list.push(new filters.HueRotation({ rotation: next.hueRotate }));
+  return list;
 }
 
 function readFileAsDataURL(file: File): Promise<string> {
@@ -770,14 +804,7 @@ export function useEditor() {
       const obj = c.getActiveObject();
       if (!(obj instanceof FabricImage)) return;
       const next = { ...readAdjustments(obj), ...patch };
-      const list = [];
-      if (next.brightness !== 0)
-        list.push(new filters.Brightness({ brightness: next.brightness }));
-      if (next.contrast !== 0)
-        list.push(new filters.Contrast({ contrast: next.contrast }));
-      if (next.saturation !== 0)
-        list.push(new filters.Saturation({ saturation: next.saturation }));
-      obj.filters = list;
+      obj.filters = buildFilterList(next);
       obj.applyFilters();
       c.requestRenderAll();
       const id = meta(obj).id;
@@ -901,6 +928,618 @@ export function useEditor() {
     toast.success("Meme style applied");
   }, [refreshSelection, saveState]);
 
+  /* ---------- agent API ----------
+   * Operations the AI agent uses. They address layers by id (never the
+   * user's active selection) and use artboard-relative coordinates where
+   * x/y is the object's center. The artboard spans (0,0)→(w,h) in scene
+   * space, so artboard coordinates equal scene coordinates. */
+
+  const layerById = useCallback(
+    (c: Canvas, id: string) => sceneObjects(c).find((o) => meta(o).id === id),
+    [sceneObjects],
+  );
+
+  /* One agent turn = one undo step: restoringRef suppresses the per-op
+   * saveState calls fired by object:added/removed/modified; endAgentTurn
+   * takes the single snapshot. Canvas input is blocked in the UI while a
+   * turn is running, so user edits can't fall into the suppressed window. */
+  const beginAgentTurn = useCallback(() => {
+    if (historyTimerRef.current) {
+      clearTimeout(historyTimerRef.current);
+      historyTimerRef.current = null;
+      saveState(); // flush a pending user edit into its own undo step first
+    }
+    restoringRef.current = true;
+  }, [saveState]);
+
+  const endAgentTurn = useCallback(
+    (changed: boolean) => {
+      // A debounce scheduled by a reused editor op mid-turn must not fire
+      // after the turn — it would split the batch into two undo steps.
+      if (historyTimerRef.current) {
+        clearTimeout(historyTimerRef.current);
+        historyTimerRef.current = null;
+      }
+      restoringRef.current = false;
+      const c = canvasRef.current;
+      if (!c) return;
+      c.requestRenderAll();
+      if (changed) saveState();
+      refreshLayers();
+      refreshSelection();
+    },
+    [saveState, refreshLayers, refreshSelection],
+  );
+
+  const agentGetState = useCallback((): AgentCanvasState | null => {
+    const c = canvasRef.current;
+    const ab = artboardRef.current;
+    if (!c || !ab) return null;
+    const r = (n: number) => Math.round(n * 10) / 10;
+    const layers: AgentLayerSnapshot[] = sceneObjects(c)
+      .slice()
+      .reverse()
+      .map((o) => {
+        const ctr = o.getCenterPoint();
+        const w = o.getScaledWidth();
+        const h = o.getScaledHeight();
+        const snap: AgentLayerSnapshot = {
+          id: meta(o).id ?? "",
+          name: layerName(o),
+          kind: kindOf(o),
+          visible: o.visible !== false,
+          x: r(ctr.x),
+          y: r(ctr.y),
+          width: r(w),
+          height: r(h),
+          left: r(ctr.x - w / 2),
+          top: r(ctr.y - h / 2),
+          right: r(ctr.x + w / 2),
+          bottom: r(ctr.y + h / 2),
+          angle: r(o.angle ?? 0),
+          opacity: Number(o.opacity ?? 1),
+        };
+        // Non-default extras only, to keep snapshots small
+        if (o.flipX) snap.flipX = true;
+        if (o.flipY) snap.flipY = true;
+        if (o.shadow) {
+          snap.shadow = {
+            color: String(o.shadow.color ?? ""),
+            blur: r(o.shadow.blur ?? 0),
+            offsetX: r(o.shadow.offsetX ?? 0),
+            offsetY: r(o.shadow.offsetY ?? 0),
+          };
+        }
+        if (o instanceof IText) {
+          snap.text = {
+            content: o.text ?? "",
+            fontFamily: String(o.fontFamily ?? "Arial"),
+            fontSize: Number(o.fontSize ?? 64),
+            textAlign: (o.textAlign as "left" | "center" | "right") ?? "left",
+            fill: typeof o.fill === "string" ? o.fill : "#ffffff",
+            stroke: typeof o.stroke === "string" ? o.stroke : "",
+            strokeWidth: Number(o.strokeWidth ?? 0),
+          };
+          const weight = o.fontWeight;
+          if (weight === "bold" || (typeof weight === "number" && weight >= 600))
+            snap.text.fontWeight = "bold";
+          if (o.fontStyle === "italic") snap.text.fontStyle = "italic";
+          if (o.underline) snap.text.underline = true;
+          if (o.linethrough) snap.text.linethrough = true;
+          if (o.lineHeight !== undefined && Math.abs(o.lineHeight - 1.16) > 1e-3)
+            snap.text.lineHeight = r(o.lineHeight);
+          if (o.charSpacing) snap.text.charSpacing = r(o.charSpacing);
+          if (o.textBackgroundColor)
+            snap.text.textBackgroundColor = String(o.textBackgroundColor);
+        } else if (o instanceof FabricImage) {
+          snap.image = readAdjustments(o);
+        } else if (!(o instanceof Group)) {
+          snap.shape = {
+            fill: typeof o.fill === "string" ? o.fill : "",
+            stroke: typeof o.stroke === "string" ? o.stroke : "",
+            strokeWidth: Number(o.strokeWidth ?? 0),
+          };
+          if (o instanceof Rect && o.rx)
+            snap.shape.cornerRadius = r(o.rx * Math.abs(o.scaleX ?? 1));
+        }
+        return snap;
+      });
+    return {
+      artboard: {
+        width: ab.width!,
+        height: ab.height!,
+        background:
+          artboardBgRef.current === null
+            ? "transparent"
+            : artboardBgRef.current,
+      },
+      layers,
+    };
+  }, [sceneObjects]);
+
+  const agentScreenshot = useCallback((maxDim = 768): string | null => {
+    const c = canvasRef.current;
+    const ab = artboardRef.current;
+    if (!c || !ab) return null;
+    const vt = [...c.viewportTransform] as [
+      number,
+      number,
+      number,
+      number,
+      number,
+      number,
+    ];
+    const shadow = ab.shadow;
+    const stroke = ab.stroke;
+    ab.shadow = null;
+    ab.stroke = null;
+    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
+    try {
+      return c.toDataURL({
+        format: "png",
+        left: ab.left,
+        top: ab.top,
+        width: ab.width,
+        height: ab.height,
+        multiplier: Math.min(1, maxDim / Math.max(ab.width!, ab.height!)),
+        enableRetinaScaling: false,
+      });
+    } finally {
+      ab.shadow = shadow;
+      ab.stroke = stroke;
+      c.setViewportTransform(vt);
+      c.requestRenderAll();
+    }
+  }, []);
+
+  /** Eyedropper: exact rendered color at an artboard point. Lets the agent
+   *  match backgrounds to images (baked-in image backgrounds rarely equal a
+   *  guessed flat color) and check text contrast. */
+  const agentSampleColor = useCallback(
+    (x: number, y: number): { ok: boolean; color?: string; error?: string } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      if (x < 0 || y < 0 || x > ab.width! || y > ab.height!)
+        return { ok: false, error: "Point is outside the artboard" };
+      const vt = [...c.viewportTransform] as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      const shadow = ab.shadow;
+      const stroke = ab.stroke;
+      ab.shadow = null;
+      ab.stroke = null;
+      c.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      try {
+        const el = c.toCanvasElement(1, {
+          left: Math.min(Math.floor(x), ab.width! - 1),
+          top: Math.min(Math.floor(y), ab.height! - 1),
+          width: 1,
+          height: 1,
+        });
+        const ctx = el.getContext("2d");
+        if (!ctx) return { ok: false, error: "Could not sample" };
+        const d = ctx.getImageData(0, 0, 1, 1).data;
+        const hex = (n: number) => n.toString(16).padStart(2, "0");
+        return { ok: true, color: `#${hex(d[0])}${hex(d[1])}${hex(d[2])}` };
+      } finally {
+        ab.shadow = shadow;
+        ab.stroke = stroke;
+        c.setViewportTransform(vt);
+        c.requestRenderAll();
+      }
+    },
+    [],
+  );
+
+  const agentApplyToLayer = useCallback(
+    (id: string, patch: AgentLayerPatch): { ok: boolean; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (patch.cornerRadius !== undefined && !(obj instanceof Rect))
+        return {
+          ok: false,
+          error: "cornerRadius only applies to rectangle layers",
+        };
+
+      if (patch.name !== undefined) meta(obj).name = patch.name;
+      if (patch.angle !== undefined) obj.set({ angle: patch.angle });
+      if (patch.opacity !== undefined)
+        obj.set({ opacity: Math.min(1, Math.max(0, patch.opacity)) });
+      if (patch.visible !== undefined) obj.set({ visible: patch.visible });
+      if (patch.flipX !== undefined) obj.set({ flipX: patch.flipX });
+      if (patch.flipY !== undefined) obj.set({ flipY: patch.flipY });
+      if (patch.fill !== undefined) obj.set({ fill: patch.fill });
+      if (patch.stroke !== undefined) obj.set({ stroke: patch.stroke });
+      if (patch.strokeWidth !== undefined)
+        obj.set({ strokeWidth: patch.strokeWidth });
+
+      if (
+        patch.shadowColor !== undefined ||
+        patch.shadowBlur !== undefined ||
+        patch.shadowOffsetX !== undefined ||
+        patch.shadowOffsetY !== undefined
+      ) {
+        if (patch.shadowColor === "none") {
+          obj.set({ shadow: null });
+        } else {
+          const prev = obj.shadow instanceof Shadow ? obj.shadow : null;
+          obj.set({
+            shadow: new Shadow({
+              color: patch.shadowColor ?? prev?.color ?? "rgba(0,0,0,0.5)",
+              blur: patch.shadowBlur ?? prev?.blur ?? 12,
+              offsetX: patch.shadowOffsetX ?? prev?.offsetX ?? 0,
+              offsetY: patch.shadowOffsetY ?? prev?.offsetY ?? 6,
+            }),
+          });
+        }
+      }
+
+      if (obj instanceof IText) {
+        if (patch.text !== undefined) obj.set({ text: patch.text });
+        if (patch.fontFamily !== undefined)
+          obj.set({ fontFamily: patch.fontFamily });
+        if (patch.fontSize !== undefined) obj.set({ fontSize: patch.fontSize });
+        if (patch.textAlign !== undefined)
+          obj.set({ textAlign: patch.textAlign });
+        if (patch.fontWeight !== undefined)
+          obj.set({ fontWeight: patch.fontWeight });
+        if (patch.fontStyle !== undefined)
+          obj.set({ fontStyle: patch.fontStyle });
+        if (patch.underline !== undefined)
+          obj.set({ underline: patch.underline });
+        if (patch.linethrough !== undefined)
+          obj.set({ linethrough: patch.linethrough });
+        if (patch.lineHeight !== undefined)
+          obj.set({ lineHeight: patch.lineHeight });
+        if (patch.charSpacing !== undefined)
+          obj.set({ charSpacing: patch.charSpacing });
+        if (patch.textBackgroundColor !== undefined)
+          obj.set({
+            textBackgroundColor:
+              patch.textBackgroundColor === "none"
+                ? ""
+                : patch.textBackgroundColor,
+          });
+      }
+
+      // Resize via scale. One dimension → uniform scale (aspect ratio kept,
+      // so logos/images never distort); both dimensions → explicit stretch.
+      if (patch.width !== undefined && patch.height !== undefined) {
+        if (obj.width) obj.set({ scaleX: patch.width / obj.width });
+        if (obj.height) obj.set({ scaleY: patch.height / obj.height });
+      } else if (patch.width !== undefined) {
+        const f = patch.width / Math.max(1, obj.getScaledWidth());
+        obj.set({
+          scaleX: (obj.scaleX ?? 1) * f,
+          scaleY: (obj.scaleY ?? 1) * f,
+        });
+      } else if (patch.height !== undefined) {
+        const f = patch.height / Math.max(1, obj.getScaledHeight());
+        obj.set({
+          scaleX: (obj.scaleX ?? 1) * f,
+          scaleY: (obj.scaleY ?? 1) * f,
+        });
+      }
+
+      // After resizing so the radius compensates for the final scale and
+      // stays visually `cornerRadius` px in artboard space.
+      if (patch.cornerRadius !== undefined && obj instanceof Rect) {
+        obj.set({
+          rx: patch.cornerRadius / Math.max(0.01, Math.abs(obj.scaleX ?? 1)),
+          ry: patch.cornerRadius / Math.max(0.01, Math.abs(obj.scaleY ?? 1)),
+        });
+      }
+
+      if (patch.x !== undefined || patch.y !== undefined) {
+        const ctr = obj.getCenterPoint();
+        obj.setPositionByOrigin(
+          new Point(patch.x ?? ctr.x, patch.y ?? ctr.y),
+          "center",
+          "center",
+        );
+      }
+
+      obj.setCoords();
+      obj.dirty = true;
+      if (obj instanceof FabricImage) thumbCacheRef.current.delete(id);
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true };
+    },
+    [layerById, refreshLayers],
+  );
+
+  const agentAdjustImage = useCallback(
+    (
+      id: string,
+      patch: Partial<ImageAdjustments>,
+    ): { ok: boolean; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(obj instanceof FabricImage))
+        return { ok: false, error: `Layer "${id}" is not an image` };
+      const next = { ...readAdjustments(obj), ...patch };
+      obj.filters = buildFilterList(next);
+      obj.applyFilters();
+      thumbCacheRef.current.delete(id);
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true };
+    },
+    [layerById, refreshLayers],
+  );
+
+  const agentAddText = useCallback(
+    (opts: AgentTextOptions): { ok: boolean; id?: string; error?: string } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      const text = new IText(opts.text, {
+        left: opts.x ?? ab.width! / 2,
+        top: opts.y ?? ab.height! / 2,
+        originX: "center",
+        originY: "center",
+        fontFamily: opts.fontFamily ?? "Arial",
+        fontSize: opts.fontSize ?? 72,
+        fill: opts.fill ?? "#ffffff",
+        stroke: opts.stroke ?? "#000000",
+        strokeWidth: opts.strokeWidth ?? 0,
+        textAlign: opts.textAlign ?? "left",
+        fontWeight: opts.fontWeight ?? "normal",
+        fontStyle: opts.fontStyle ?? "normal",
+        underline: opts.underline ?? false,
+        linethrough: opts.linethrough ?? false,
+        lineHeight: opts.lineHeight ?? 1.16,
+        charSpacing: opts.charSpacing ?? 0,
+        textBackgroundColor:
+          !opts.textBackgroundColor || opts.textBackgroundColor === "none"
+            ? ""
+            : opts.textBackgroundColor,
+        paintFirst: "stroke",
+      });
+      const m = meta(text);
+      m.id = uid();
+      m.name = "Text";
+      c.add(text);
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true, id: m.id };
+    },
+    [refreshLayers],
+  );
+
+  const agentAddShape = useCallback(
+    (
+      kind: ShapeKind,
+      opts: AgentShapeOptions = {},
+    ): { ok: boolean; id?: string; error?: string } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      const base = {
+        left: opts.x ?? ab.width! / 2,
+        top: opts.y ?? ab.height! / 2,
+        originX: "center" as const,
+        originY: "center" as const,
+        fill: opts.fill ?? "#6366f1",
+        stroke: opts.stroke ?? "#c7d2fe",
+        strokeWidth: opts.strokeWidth ?? 0,
+        strokeUniform: true,
+        angle: opts.angle ?? 0,
+        opacity: opts.opacity ?? 1,
+      };
+      let shape: FabricObject;
+      if (kind === "ellipse") {
+        shape = new Ellipse({
+          ...base,
+          rx: (opts.width ?? 360) / 2,
+          ry: (opts.height ?? 260) / 2,
+        });
+        meta(shape).name = "Ellipse";
+      } else if (kind === "arrow") {
+        shape = new Polygon(
+          [
+            { x: 0, y: 40 },
+            { x: 110, y: 40 },
+            { x: 110, y: 8 },
+            { x: 200, y: 60 },
+            { x: 110, y: 112 },
+            { x: 110, y: 80 },
+            { x: 0, y: 80 },
+          ],
+          base,
+        );
+        meta(shape).name = "Arrow";
+        if (opts.width) shape.set({ scaleX: opts.width / shape.width! });
+        if (opts.height) shape.set({ scaleY: opts.height / shape.height! });
+      } else {
+        shape = new Rect({
+          ...base,
+          width: opts.width ?? 360,
+          height: opts.height ?? 260,
+          rx: opts.cornerRadius ?? 0,
+          ry: opts.cornerRadius ?? 0,
+        });
+        meta(shape).name = "Rectangle";
+      }
+      meta(shape).id = uid();
+      c.add(shape);
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true, id: meta(shape).id };
+    },
+    [refreshLayers],
+  );
+
+  const agentDuplicateLayer = useCallback(
+    async (
+      id: string,
+      at?: { x?: number; y?: number },
+    ): Promise<{ ok: boolean; id?: string; error?: string }> => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      const clone = await obj.clone(EXTRA_PROPS);
+      meta(clone).id = uid();
+      if (at?.x !== undefined || at?.y !== undefined) {
+        const ctr = obj.getCenterPoint();
+        clone.setPositionByOrigin(
+          new Point(at.x ?? ctr.x, at.y ?? ctr.y),
+          "center",
+          "center",
+        );
+      } else {
+        clone.set({
+          left: (clone.left ?? 0) + 20,
+          top: (clone.top ?? 0) + 20,
+        });
+      }
+      clone.setCoords();
+      c.add(clone);
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true, id: meta(clone).id };
+    },
+    [layerById, refreshLayers],
+  );
+
+  const agentDeleteLayer = useCallback(
+    (id: string): { ok: boolean; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (c.getActiveObjects().includes(obj)) c.discardActiveObject();
+      c.remove(obj);
+      c.requestRenderAll();
+      refreshLayers();
+      refreshSelection();
+      return { ok: true };
+    },
+    [layerById, refreshLayers, refreshSelection],
+  );
+
+  /** Position a layer relative to the artboard without coordinate math —
+   *  the reliable way for the agent to handle "top", "bottom center", etc. */
+  const agentAlignLayer = useCallback(
+    (
+      id: string,
+      opts: AgentAlignOptions,
+    ): { ok: boolean; x?: number; y?: number; error?: string } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!opts.horizontal && !opts.vertical)
+        return { ok: false, error: "Provide horizontal and/or vertical" };
+      const abW = ab.width!;
+      const abH = ab.height!;
+      const margin = opts.margin ?? Math.round(Math.min(abW, abH) * 0.05);
+      const w = obj.getScaledWidth();
+      const h = obj.getScaledHeight();
+      const ctr = obj.getCenterPoint();
+      let x = ctr.x;
+      let y = ctr.y;
+      if (opts.horizontal === "left") x = margin + w / 2;
+      else if (opts.horizontal === "center") x = abW / 2;
+      else if (opts.horizontal === "right") x = abW - margin - w / 2;
+      if (opts.vertical === "top") y = margin + h / 2;
+      else if (opts.vertical === "middle") y = abH / 2;
+      else if (opts.vertical === "bottom") y = abH - margin - h / 2;
+      obj.setPositionByOrigin(new Point(x, y), "center", "center");
+      obj.setCoords();
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true, x: Math.round(x), y: Math.round(y) };
+    },
+    [layerById, refreshLayers],
+  );
+
+  const agentMoveLayer = useCallback(
+    (
+      id: string,
+      position: "front" | "back" | "up" | "down",
+    ): { ok: boolean; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (position === "front") c.bringObjectToFront(obj);
+      else if (position === "back") c.sendObjectToBack(obj);
+      else if (position === "up") c.bringObjectForward(obj);
+      else c.sendObjectBackwards(obj);
+      const ab = artboardRef.current;
+      if (ab) c.sendObjectToBack(ab); // artboard stays pinned at the bottom
+      c.requestRenderAll();
+      refreshLayers();
+      return { ok: true };
+    },
+    [layerById, refreshLayers],
+  );
+
+  const agentGroupLayers = useCallback(
+    (ids: string[]): { ok: boolean; id?: string; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const objs = ids.map((id) => layerById(c, id));
+      const missing = ids.filter((_, i) => !objs[i]);
+      if (missing.length > 0)
+        return { ok: false, error: `No layer(s): ${missing.join(", ")}` };
+      if (objs.length < 2)
+        return { ok: false, error: "Need at least 2 layers to group" };
+      c.discardActiveObject();
+      const members = objs as FabricObject[];
+      members.forEach((o) => c.remove(o));
+      const group = new Group(members);
+      meta(group).id = uid();
+      meta(group).name = "Group";
+      c.add(group);
+      c.requestRenderAll();
+      refreshLayers();
+      refreshSelection();
+      return { ok: true, id: meta(group).id };
+    },
+    [layerById, refreshLayers, refreshSelection],
+  );
+
+  const agentUngroupLayer = useCallback(
+    (id: string): { ok: boolean; ids?: string[]; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(obj instanceof Group))
+        return { ok: false, error: `Layer "${id}" is not a group` };
+      if (c.getActiveObjects().includes(obj)) c.discardActiveObject();
+      c.remove(obj);
+      // removeAll() restores the children's absolute coordinates
+      const children = obj.removeAll();
+      const ids: string[] = [];
+      children.forEach((o) => {
+        if (!meta(o).id) meta(o).id = uid();
+        ids.push(meta(o).id!);
+        c.add(o);
+      });
+      c.requestRenderAll();
+      refreshLayers();
+      refreshSelection();
+      return { ok: true, ids };
+    },
+    [layerById, refreshLayers, refreshSelection],
+  );
+
   /* ---------- artboard & export ---------- */
 
   const applyPreset = useCallback(
@@ -930,6 +1569,32 @@ export function useEditor() {
       );
     },
     [applyPreset],
+  );
+
+  /** Agent op: change artboard size and/or background (background accepts a
+   *  CSS color or "transparent"). Reuses the user-facing ops; their history
+   *  writes are suppressed inside an agent turn. */
+  const agentSetArtboard = useCallback(
+    (opts: {
+      width?: number;
+      height?: number;
+      background?: string;
+    }): { ok: boolean; error?: string } => {
+      const ab = artboardRef.current;
+      if (!canvasRef.current || !ab)
+        return { ok: false, error: "Editor not ready" };
+      if (opts.width !== undefined || opts.height !== undefined) {
+        applyCustomSize(opts.width ?? ab.width!, opts.height ?? ab.height!);
+      }
+      if (opts.background !== undefined) {
+        setArtboardBg(
+          opts.background === "transparent" ? null : opts.background,
+        );
+      }
+      refreshLayers();
+      return { ok: true };
+    },
+    [applyCustomSize, setArtboardBg, refreshLayers],
   );
 
   const exportPNG = useCallback(() => {
@@ -1484,6 +2149,23 @@ export function useEditor() {
     applyMemePreset,
     exportPNG,
     handleDrop,
+    /* agent API */
+    beginAgentTurn,
+    endAgentTurn,
+    agentGetState,
+    agentScreenshot,
+    agentSampleColor,
+    agentApplyToLayer,
+    agentAdjustImage,
+    agentAddText,
+    agentAddShape,
+    agentDuplicateLayer,
+    agentDeleteLayer,
+    agentAlignLayer,
+    agentMoveLayer,
+    agentGroupLayers,
+    agentUngroupLayer,
+    agentSetArtboard,
   };
 }
 
