@@ -23,6 +23,8 @@ export type AgentToolContext = Pick<
   | "agentDuplicateLayer"
   | "agentDeleteLayer"
   | "agentAlignLayer"
+  | "agentDistributeLayers"
+  | "agentArrangeGrid"
   | "agentMoveLayer"
   | "agentGroupLayers"
   | "agentUngroupLayer"
@@ -43,6 +45,7 @@ Working rules:
 - PLAN, then act in ONE batch: decide the full layout first, apply all changes, then inspect the screenshot you automatically receive after every mutating step. Apply at most ONE round of corrections — pixel-perfect is not expected, and endless nudging is a failure mode. Never adjust the same property of the same layer more than twice per request.
 - Image adjustment values (brightness/contrast/saturation/hueRotate) range from -1 to 1, where 0 means unchanged; blur ranges 0 to 1.
 - For repeated elements (badges, list rows, photo grids), style ONE layer fully, then duplicate_layer it and change only what differs — never rebuild each copy from scratch.
+- For multi-item layouts, let the tools do the math: distribute_layers for equal spacing along a row/column, arrange_grid for a grid. Never compute per-item x/y by hand when these apply.
 - Keep text replies short: one or two sentences on what you did. Don't enumerate every tool call.
 - If the request is ambiguous, make a reasonable choice and mention it rather than asking.
 
@@ -277,6 +280,44 @@ export const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "distribute_layers",
+    description:
+      "Space several layers evenly along an axis WITHOUT computing coordinates — use for \"distribute these with equal gaps\", tidy rows or columns. Layers are ordered by their CURRENT position on the axis (input order does not matter). Omit `gap` to equalize the gaps while keeping the first and last item in place; set `gap` to pack them that many px apart from the current first item. Cross-axis position is unchanged. Returns each layer's new center.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        layer_ids: { type: "array", items: { type: "string" } },
+        axis: { type: "string", enum: ["horizontal", "vertical"] },
+        gap: {
+          type: "number",
+          description: "Optional fixed gap in px between item edges",
+        },
+      },
+      required: ["layer_ids", "axis"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "arrange_grid",
+    description:
+      "Lay several layers out on a tidy grid WITHOUT computing coordinates — use for photo grids, badge rows, card layouts. Items fill row by row in the order given, into uniform cells sized to the largest item, `gap` px apart. This tidies POSITION only — items keep their own size (use resize/fit to normalize sizes first). The grid is centered on the artboard unless x/y (its top-left corner) are given. Returns the grid's bounding box.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        layer_ids: { type: "array", items: { type: "string" } },
+        columns: { type: "number" },
+        gap: { type: "number", description: "Gap between cells in px" },
+        x: {
+          type: "number",
+          description: "Optional grid top-left x (artboard-relative)",
+        },
+        y: { type: "number", description: "Optional grid top-left y" },
+      },
+      required: ["layer_ids", "columns"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "set_artboard",
     description:
       "Change the artboard (canvas) size and/or background color. Use this for format changes like story (1080×1920), post (1080×1350), landscape (1920×1080) — never stretch layers to fake a format. Background accepts a CSS color or \"transparent\". Layer coordinates are artboard-relative, so re-read the canvas state and reposition layers after resizing.",
@@ -449,6 +490,36 @@ export async function executeTool(
       return {
         content: JSON.stringify({ ok: true, x: res.x, y: res.y }),
         label: `Aligned layer ${[opts.vertical, opts.horizontal].filter(Boolean).join(" ")}`,
+        mutated: true,
+      };
+    }
+    case "distribute_layers": {
+      const { layer_ids, axis, gap } = args as unknown as {
+        layer_ids: string[];
+        axis: "horizontal" | "vertical";
+        gap?: number;
+      };
+      const res = ctx.agentDistributeLayers(layer_ids, axis, gap);
+      if (!res.ok) return { content: res.error ?? "Failed", isError: true };
+      return {
+        content: JSON.stringify({ ok: true, positions: res.positions }),
+        label: `Distributed ${layer_ids?.length ?? 0} layers ${axis}`,
+        mutated: true,
+      };
+    }
+    case "arrange_grid": {
+      const { layer_ids, columns, gap, x, y } = args as unknown as {
+        layer_ids: string[];
+        columns: number;
+        gap?: number;
+        x?: number;
+        y?: number;
+      };
+      const res = ctx.agentArrangeGrid(layer_ids, columns, gap, x, y);
+      if (!res.ok) return { content: res.error ?? "Failed", isError: true };
+      return {
+        content: JSON.stringify({ ok: true, box: res.box }),
+        label: `Arranged ${layer_ids?.length ?? 0} layers in ${columns}-col grid`,
         mutated: true,
       };
     }

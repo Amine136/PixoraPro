@@ -46,6 +46,8 @@ type AgentEditorApi = Pick<
   | "agentAddShape"
   | "agentDeleteLayer"
   | "agentAlignLayer"
+  | "agentDistributeLayers"
+  | "agentArrangeGrid"
   | "agentMoveLayer"
   | "agentGroupLayers"
   | "agentUngroupLayer"

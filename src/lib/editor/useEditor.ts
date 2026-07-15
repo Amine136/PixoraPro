@@ -39,6 +39,7 @@ import {
   type ShapeKind,
   type Tool,
 } from "./types";
+import { computeDistribute, computeGrid, type LayoutBox } from "./layout";
 
 const ARTBOARD_ID = "__artboard__";
 const ARTBOARD_PLACEHOLDER_FILL = "#13131c";
@@ -1467,6 +1468,107 @@ export function useEditor() {
     [layerById, refreshLayers],
   );
 
+  // Space several layers evenly along an axis — the layout math lives in
+  // ./layout so it stays testable; here we just read extents and apply centers.
+  const agentDistributeLayers = useCallback(
+    (
+      ids: string[],
+      axis: "horizontal" | "vertical",
+      gap?: number,
+    ): {
+      ok: boolean;
+      positions?: { id: string; x: number; y: number }[];
+      error?: string;
+    } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      if (!Array.isArray(ids) || ids.length < 2)
+        return { ok: false, error: "Provide at least 2 layer ids" };
+      const objById = new Map<string, NonNullable<ReturnType<typeof layerById>>>();
+      const boxes: LayoutBox[] = [];
+      for (const id of ids) {
+        const o = layerById(c, id);
+        if (!o) return { ok: false, error: `No layer with id "${id}"` };
+        objById.set(id, o);
+        const r = o.getBoundingRect();
+        const ctr = o.getCenterPoint();
+        boxes.push({ id, cx: ctr.x, cy: ctr.y, w: r.width, h: r.height });
+      }
+      const placements = computeDistribute(boxes, axis, gap);
+      for (const p of placements) {
+        const o = objById.get(p.id)!;
+        o.setPositionByOrigin(new Point(p.cx, p.cy), "center", "center");
+        o.setCoords();
+      }
+      c.requestRenderAll();
+      refreshLayers();
+      return {
+        ok: true,
+        positions: placements.map((p) => ({
+          id: p.id,
+          x: Math.round(p.cx),
+          y: Math.round(p.cy),
+        })),
+      };
+    },
+    [layerById, refreshLayers],
+  );
+
+  // Lay several layers out on a tidy grid (position only; sizes unchanged).
+  const agentArrangeGrid = useCallback(
+    (
+      ids: string[],
+      columns: number,
+      gap?: number,
+      x?: number,
+      y?: number,
+    ): {
+      ok: boolean;
+      box?: { x: number; y: number; width: number; height: number };
+      error?: string;
+    } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      if (!Array.isArray(ids) || ids.length < 1)
+        return { ok: false, error: "Provide at least 1 layer id" };
+      const objById = new Map<string, NonNullable<ReturnType<typeof layerById>>>();
+      const boxes: LayoutBox[] = [];
+      for (const id of ids) {
+        const o = layerById(c, id);
+        if (!o) return { ok: false, error: `No layer with id "${id}"` };
+        objById.set(id, o);
+        const r = o.getBoundingRect();
+        const ctr = o.getCenterPoint();
+        boxes.push({ id, cx: ctr.x, cy: ctr.y, w: r.width, h: r.height });
+      }
+      const g = gap ?? Math.round(Math.min(ab.width!, ab.height!) * 0.03);
+      const origin =
+        x != null && y != null ? { x, y } : null;
+      const { placements, box } = computeGrid(boxes, columns, g, origin, {
+        width: ab.width!,
+        height: ab.height!,
+      });
+      for (const p of placements) {
+        const o = objById.get(p.id)!;
+        o.setPositionByOrigin(new Point(p.cx, p.cy), "center", "center");
+        o.setCoords();
+      }
+      c.requestRenderAll();
+      refreshLayers();
+      return {
+        ok: true,
+        box: {
+          x: Math.round(box.x),
+          y: Math.round(box.y),
+          width: Math.round(box.width),
+          height: Math.round(box.height),
+        },
+      };
+    },
+    [layerById, refreshLayers],
+  );
+
   const agentMoveLayer = useCallback(
     (
       id: string,
@@ -2162,6 +2264,8 @@ export function useEditor() {
     agentDuplicateLayer,
     agentDeleteLayer,
     agentAlignLayer,
+    agentDistributeLayers,
+    agentArrangeGrid,
     agentMoveLayer,
     agentGroupLayers,
     agentUngroupLayer,
