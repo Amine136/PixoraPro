@@ -29,12 +29,13 @@ Swapping providers or pointing at the parent system is a one-file change
 - **Protocol + transport** — neutral `AgentMessage` / `ToolDef` / streamed
   events as NDJSON, incl. `done{stopReason}` and `error{retryable}`;
   `HttpTransport` switches gateway vs local `/api/agent` by env.
-- **16 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
+- **18 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
   create: `add_text`, `add_shape`; modify: `set_properties`, `adjust_image`,
-  `align_layer`, `distribute_layers`, `arrange_grid`, `move_layer` (z-order),
-  `duplicate_layer`; structure: `group_layers`, `ungroup_layer`; remove:
-  `delete_layer`; canvas: `set_artboard`. Layout math (distribute/grid) lives in
-  the pure, unit-tested `src/lib/editor/layout.ts`.
+  `align_layer`, `distribute_layers`, `arrange_grid`, `set_image_fit`,
+  `place_in_card`, `move_layer` (z-order), `duplicate_layer`; structure:
+  `group_layers`, `ungroup_layer`; remove: `delete_layer`; canvas: `set_artboard`.
+  Layout + image-fit math is pure and unit-tested in `src/lib/editor/layout.ts`;
+  `set_image_fit` cover uses native crop (not clipPath) so bounds stay honest.
 - **Chat UI + loop** — streamed text, action log, ~15-round cap, stop button,
   canvas-input blocked mid-turn, screenshots kept only for the latest turn.
 - **Guardrails** — bulk delete (≥3 layers/turn) requires an in-UI confirmation;
@@ -54,13 +55,10 @@ sizes). Priority order:
 1. ~~`distribute_layers` / `arrange_grid`~~ — **DONE** (see Built). Pure geometry
    in `layout.ts`, unit-tested; the model reaches for them on layout requests.
 
-2. **Framed image unit (card + fit modes)** — design these two together; a
-   "card" is a frame + a fit-box, and both need one shared Fabric `clipPath`.
-   - `place_in_card(image_id, { width, height, radius, padding, background,
-     shadow? })` — normalize a raw image into a uniform tile the agent can then
-     align/distribute as a box, not raw pixels.
-   - `set_image_fit(image_id, target_box, mode: contain|cover|fill)` — normalize
-     logos of different aspect ratios cleanly (`cover` crops via clipPath).
+2. ~~Framed image unit (`set_image_fit` + `place_in_card`)~~ — **DONE** (see
+   Built). Cover uses native crop, not clipPath (keeps `getBoundingRect` honest
+   for the arrange tools + survives undo). Rounded *image* corners deferred as
+   later polish; cards use rect `rx` + padding.
 
 3. **RTL-aware alignment** — cheap mapping, but needs a new document-direction
    property on the canvas first. `align_layer` gains `start`/`end` that resolve
