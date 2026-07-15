@@ -70,6 +70,70 @@ export function computeDistribute(
   return out;
 }
 
+export type FitMode = "contain" | "cover" | "fill";
+
+export interface FitResult {
+  /** Native FabricImage crop props (source-pixel space) + scale. */
+  cropX: number;
+  cropY: number;
+  width: number;
+  height: number;
+  scaleX: number;
+  scaleY: number;
+}
+
+/**
+ * Fit an image of natural size natW×natH into a boxW×boxH target.
+ * `contain` scales uniformly to fit inside (no crop); `cover` crops the
+ * overflow via native crop (so bounds equal the box, not the overflow);
+ * `fill` stretches to the box (may distort). Uses native crop rather than a
+ * clipPath so `getBoundingRect` reflects the visible box and the values
+ * survive undo serialization. Read natW/natH from the source element, never
+ * from a possibly-already-cropped `img.width`, so re-fitting composes.
+ */
+export function computeFit(
+  natW: number,
+  natH: number,
+  boxW: number,
+  boxH: number,
+  mode: FitMode,
+): FitResult {
+  if (mode === "contain") {
+    const s = Math.min(boxW / natW, boxH / natH);
+    return { cropX: 0, cropY: 0, width: natW, height: natH, scaleX: s, scaleY: s };
+  }
+  if (mode === "fill") {
+    return {
+      cropX: 0,
+      cropY: 0,
+      width: natW,
+      height: natH,
+      scaleX: boxW / natW,
+      scaleY: boxH / natH,
+    };
+  }
+  // cover: crop to the box's aspect ratio, then scale uniformly to the box
+  const aspect = boxW / boxH;
+  let cropW: number;
+  let cropH: number;
+  if (natW / natH > aspect) {
+    cropH = natH;
+    cropW = natH * aspect;
+  } else {
+    cropW = natW;
+    cropH = natW / aspect;
+  }
+  const s = boxW / cropW;
+  return {
+    cropX: (natW - cropW) / 2,
+    cropY: (natH - cropH) / 2,
+    width: cropW,
+    height: cropH,
+    scaleX: s,
+    scaleY: s,
+  };
+}
+
 export interface GridResult {
   placements: Placement[];
   /** Top-left corner and total size of the laid-out grid, artboard-relative. */

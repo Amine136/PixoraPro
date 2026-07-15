@@ -39,7 +39,13 @@ import {
   type ShapeKind,
   type Tool,
 } from "./types";
-import { computeDistribute, computeGrid, type LayoutBox } from "./layout";
+import {
+  computeDistribute,
+  computeFit,
+  computeGrid,
+  type FitMode,
+  type LayoutBox,
+} from "./layout";
 
 const ARTBOARD_ID = "__artboard__";
 const ARTBOARD_PLACEHOLDER_FILL = "#13131c";
@@ -53,6 +59,32 @@ const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
+
+/** Fit an image into a box using native crop/scale (see computeFit). Reads the
+ *  source element's natural size so repeated fits compose instead of shrinking.
+ *  Keeps the image centered where it was. */
+function applyFit(
+  img: FabricImage,
+  boxW: number,
+  boxH: number,
+  mode: FitMode,
+) {
+  const el = img.getElement() as HTMLImageElement & { width: number };
+  const natW = el.naturalWidth || el.width || img.width!;
+  const natH = el.naturalHeight || el.height || img.height!;
+  const ctr = img.getCenterPoint();
+  const f = computeFit(natW, natH, boxW, boxH, mode);
+  img.set({
+    cropX: f.cropX,
+    cropY: f.cropY,
+    width: f.width,
+    height: f.height,
+    scaleX: f.scaleX,
+    scaleY: f.scaleY,
+  });
+  img.setPositionByOrigin(ctr, "center", "center");
+  img.setCoords();
+}
 
 /* Selection chrome: white circular handles with an indigo ring */
 InteractiveFabricObject.ownDefaults = {
@@ -1569,6 +1601,105 @@ export function useEditor() {
     [layerById, refreshLayers],
   );
 
+  // Normalize an image into a target box: contain / cover (crop) / fill.
+  const agentSetImageFit = useCallback(
+    (
+      id: string,
+      width: number,
+      height: number,
+      mode: FitMode,
+    ): { ok: boolean; width?: number; height?: number; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(obj instanceof FabricImage))
+        return { ok: false, error: `Layer "${id}" is not an image` };
+      if (!(width > 0) || !(height > 0))
+        return { ok: false, error: "width and height must be positive" };
+      applyFit(obj, width, height, mode);
+      c.requestRenderAll();
+      refreshLayers();
+      const br = obj.getBoundingRect();
+      return {
+        ok: true,
+        width: Math.round(br.width),
+        height: Math.round(br.height),
+      };
+    },
+    [layerById, refreshLayers],
+  );
+
+  // Wrap an image in a uniform card: a rounded background rect + the image
+  // cover-fit into the padded interior, grouped into one tile so the agent can
+  // align/distribute cards as boxes instead of raw mismatched images.
+  const agentPlaceInCard = useCallback(
+    (
+      id: string,
+      opts: {
+        width: number;
+        height: number;
+        radius?: number;
+        padding?: number;
+        background?: string;
+        shadow?: boolean;
+      },
+    ): { ok: boolean; id?: string; width?: number; height?: number; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const img = layerById(c, id);
+      if (!img) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(img instanceof FabricImage))
+        return { ok: false, error: `Layer "${id}" is not an image` };
+      const { width, height } = opts;
+      if (!(width > 0) || !(height > 0))
+        return { ok: false, error: "width and height must be positive" };
+      const padding = Math.max(0, opts.padding ?? 0);
+      const innerW = width - 2 * padding;
+      const innerH = height - 2 * padding;
+      if (innerW <= 0 || innerH <= 0)
+        return { ok: false, error: "padding too large for the card size" };
+
+      const ctr = img.getCenterPoint();
+      applyFit(img, innerW, innerH, "cover");
+      img.setPositionByOrigin(ctr, "center", "center");
+      img.setCoords();
+
+      const rect = new Rect({
+        left: ctr.x,
+        top: ctr.y,
+        originX: "center",
+        originY: "center",
+        width,
+        height,
+        rx: opts.radius ?? 0,
+        ry: opts.radius ?? 0,
+        fill: opts.background ?? "#ffffff",
+        strokeWidth: 0,
+        shadow: opts.shadow
+          ? new Shadow({
+              color: "rgba(0,0,0,0.28)",
+              blur: 22,
+              offsetX: 0,
+              offsetY: 10,
+            })
+          : undefined,
+      });
+
+      c.discardActiveObject();
+      c.remove(img);
+      const group = new Group([rect, img]); // rect first = behind the image
+      meta(group).id = uid();
+      meta(group).name = "Card";
+      c.add(group);
+      c.requestRenderAll();
+      refreshLayers();
+      refreshSelection();
+      return { ok: true, id: meta(group).id, width, height };
+    },
+    [layerById, refreshLayers, refreshSelection],
+  );
+
   const agentMoveLayer = useCallback(
     (
       id: string,
@@ -2266,6 +2397,8 @@ export function useEditor() {
     agentAlignLayer,
     agentDistributeLayers,
     agentArrangeGrid,
+    agentSetImageFit,
+    agentPlaceInCard,
     agentMoveLayer,
     agentGroupLayers,
     agentUngroupLayer,

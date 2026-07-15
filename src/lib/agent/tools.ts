@@ -25,6 +25,8 @@ export type AgentToolContext = Pick<
   | "agentAlignLayer"
   | "agentDistributeLayers"
   | "agentArrangeGrid"
+  | "agentSetImageFit"
+  | "agentPlaceInCard"
   | "agentMoveLayer"
   | "agentGroupLayers"
   | "agentUngroupLayer"
@@ -46,6 +48,7 @@ Working rules:
 - Image adjustment values (brightness/contrast/saturation/hueRotate) range from -1 to 1, where 0 means unchanged; blur ranges 0 to 1.
 - For repeated elements (badges, list rows, photo grids), style ONE layer fully, then duplicate_layer it and change only what differs — never rebuild each copy from scratch.
 - For multi-item layouts, let the tools do the math: distribute_layers for equal spacing along a row/column, arrange_grid for a grid. Never compute per-item x/y by hand when these apply.
+- To normalize images of different sizes/aspect ratios, use set_image_fit (cover/contain/fill) or place_in_card BEFORE arranging — arrange_grid tidies position, not size, so equal-size tiles come from fit/cards first.
 - Keep text replies short: one or two sentences on what you did. Don't enumerate every tool call.
 - If the request is ambiguous, make a reasonable choice and mention it rather than asking.
 
@@ -318,6 +321,47 @@ export const TOOL_DEFS: ToolDef[] = [
     },
   },
   {
+    name: "set_image_fit",
+    description:
+      "Resize an image to fit a target box WITHOUT distorting it, so images of different aspect ratios normalize cleanly. \"contain\": whole image fits inside the box (may leave gaps). \"cover\": image fills the box and the overflow is cropped (best for uniform tiles/thumbnails). \"fill\": stretched to exactly the box (distorts — avoid for logos/photos). Cropping is non-destructive. Returns the resulting visible width/height.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        image_id: { type: "string" },
+        width: { type: "number" },
+        height: { type: "number" },
+        mode: { type: "string", enum: ["contain", "cover", "fill"] },
+      },
+      required: ["image_id", "width", "height", "mode"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "place_in_card",
+    description:
+      "Wrap an image in a uniform card tile: a rounded background rectangle with the image cover-fit into its padded interior, grouped into ONE layer. Use this to normalize several mismatched images (logos, photos) into identical tiles you can then align/distribute/arrange_grid as boxes. Returns the new card layer's id. Rounded corners look best with some padding.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        image_id: { type: "string" },
+        width: { type: "number" },
+        height: { type: "number" },
+        radius: { type: "number", description: "Corner radius in px (0 = square)" },
+        padding: {
+          type: "number",
+          description: "Inset between the image and the card edge in px",
+        },
+        background: {
+          type: "string",
+          description: "Card fill — a CSS color (default white)",
+        },
+        shadow: { type: "boolean", description: "Add a soft drop shadow" },
+      },
+      required: ["image_id", "width", "height"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "set_artboard",
     description:
       "Change the artboard (canvas) size and/or background color. Use this for format changes like story (1080×1920), post (1080×1350), landscape (1920×1080) — never stretch layers to fake a format. Background accepts a CSS color or \"transparent\". Layer coordinates are artboard-relative, so re-read the canvas state and reposition layers after resizing.",
@@ -520,6 +564,39 @@ export async function executeTool(
       return {
         content: JSON.stringify({ ok: true, box: res.box }),
         label: `Arranged ${layer_ids?.length ?? 0} layers in ${columns}-col grid`,
+        mutated: true,
+      };
+    }
+    case "set_image_fit": {
+      const { image_id, width, height, mode } = args as unknown as {
+        image_id: string;
+        width: number;
+        height: number;
+        mode: "contain" | "cover" | "fill";
+      };
+      const res = ctx.agentSetImageFit(image_id, width, height, mode);
+      if (!res.ok) return { content: res.error ?? "Failed", isError: true };
+      return {
+        content: JSON.stringify({ ok: true, width: res.width, height: res.height }),
+        label: `Fit image (${mode})`,
+        mutated: true,
+      };
+    }
+    case "place_in_card": {
+      const { image_id, ...opts } = args as unknown as {
+        image_id: string;
+        width: number;
+        height: number;
+        radius?: number;
+        padding?: number;
+        background?: string;
+        shadow?: boolean;
+      };
+      const res = ctx.agentPlaceInCard(image_id, opts);
+      if (!res.ok) return { content: res.error ?? "Failed", isError: true };
+      return {
+        content: JSON.stringify({ ok: true, id: res.id, width: res.width, height: res.height }),
+        label: `Placed image in card`,
         mutated: true,
       };
     }

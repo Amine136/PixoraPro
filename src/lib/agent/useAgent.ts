@@ -48,6 +48,8 @@ type AgentEditorApi = Pick<
   | "agentAlignLayer"
   | "agentDistributeLayers"
   | "agentArrangeGrid"
+  | "agentSetImageFit"
+  | "agentPlaceInCard"
   | "agentMoveLayer"
   | "agentGroupLayers"
   | "agentUngroupLayer"
