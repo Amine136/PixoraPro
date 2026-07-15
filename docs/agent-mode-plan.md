@@ -36,6 +36,8 @@ Swapping providers or pointing at the parent system is a one-file change
   `group_layers`, `ungroup_layer`; remove: `delete_layer`; canvas: `set_artboard`.
   Layout + image-fit math is pure and unit-tested in `src/lib/editor/layout.ts`;
   `set_image_fit` cover uses native crop (not clipPath) so bounds stay honest.
+  `align_layer` also takes RTL-aware `start`/`end`; document `direction` is a
+  `set_artboard` field surfaced in `get_canvas_state`.
 - **Chat UI + loop** — streamed text, action log, ~15-round cap, stop button,
   canvas-input blocked mid-turn, screenshots kept only for the latest turn.
 - **Guardrails** — bulk delete (≥3 layers/turn) requires an in-UI confirmation;
@@ -60,14 +62,21 @@ sizes). Priority order:
    for the arrange tools + survives undo). Rounded *image* corners deferred as
    later polish; cards use rect `rx` + padding.
 
-3. **RTL-aware alignment** — cheap mapping, but needs a new document-direction
-   property on the canvas first. `align_layer` gains `start`/`end` that resolve
-   to right/left by direction, so "align start" is correct in Arabic layouts.
-   **Conditional:** worth it only if RTL is a first-class Vibecraft target — decide before building.
+3. ~~RTL-aware alignment~~ — **DONE.** RTL confirmed a first-class Vibecraft
+   target, so we built it. `direction` ("ltr"/"rtl") is a document-level property
+   stored on the artboard object (in `EXTRA_PROPS`, so it survives undo + JSON
+   round-trips); set via `set_artboard`, surfaced in `get_canvas_state`.
+   `align_layer` horizontal gains `start`/`end` that resolve to left/right by
+   direction (start→left, end→right in LTR; mirrored in RTL). No UI toggle and no
+   React state — the three consumers read `meta(ab).direction ?? "ltr"` directly.
+   Grid/distribute fill order and text `textAlign` deliberately left untouched.
 
-4. **`docs/agent-gateway.md`** (Phase 7) — one-page integration contract for the
-   parent-system team: endpoint, auth header, request/response JSON, NDJSON
-   format, tool-schema subset. `route.ts` is the runnable reference.
+4. ~~`docs/agent-gateway.md`~~ — **DONE.** One-page integration contract for the
+   parent-system team: endpoint + `NEXT_PUBLIC_AGENT_GATEWAY_URL`, `Authorization`
+   bearer, `AgentRequest` JSON, NDJSON `AgentEvent` stream, portable tool-schema
+   subset, `signature` round-trip, error/retryable semantics, conformance
+   checklist. Derived from `route.ts`/`gemini.ts`/`protocol.ts`/`transport.ts`,
+   which it names as the runnable reference.
 
 > Note: 1–3 move Pixora from edit primitives toward a small layout system. Good
 > for an agent (it works in intent, not coordinates), but a conscious expansion

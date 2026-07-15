@@ -269,12 +269,15 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: "align_layer",
     description:
-      "Position a layer relative to the artboard WITHOUT computing coordinates: horizontal left/center/right and/or vertical top/middle/bottom, with an optional margin from the edge (defaults to ~5% of the artboard). ALWAYS prefer this over set_properties x/y for placements like \"at the top\", \"centered\", \"bottom right\". Returns the resulting center x/y.",
+      "Position a layer relative to the artboard WITHOUT computing coordinates: horizontal left/center/right and/or vertical top/middle/bottom, with an optional margin from the edge (defaults to ~5% of the artboard). Use `start`/`end` for horizontal instead of left/right when the placement should follow the document's reading direction — they resolve to left/right in LTR and right/left in RTL (e.g. Arabic layouts), so \"align to the start\" is correct either way. Check the artboard `direction` in get_canvas_state. ALWAYS prefer this over set_properties x/y for placements like \"at the top\", \"centered\", \"bottom right\". Returns the resulting center x/y.",
     inputSchema: {
       type: "object",
       properties: {
         layer_id: { type: "string" },
-        horizontal: { type: "string", enum: ["left", "center", "right"] },
+        horizontal: {
+          type: "string",
+          enum: ["left", "center", "right", "start", "end"],
+        },
         vertical: { type: "string", enum: ["top", "middle", "bottom"] },
         margin: { type: "number", description: "Distance from the artboard edge in px" },
       },
@@ -364,13 +367,14 @@ export const TOOL_DEFS: ToolDef[] = [
   {
     name: "set_artboard",
     description:
-      "Change the artboard (canvas) size and/or background color. Use this for format changes like story (1080×1920), post (1080×1350), landscape (1920×1080) — never stretch layers to fake a format. Background accepts a CSS color or \"transparent\". Layer coordinates are artboard-relative, so re-read the canvas state and reposition layers after resizing.",
+      "Change the artboard (canvas) size, background color, and/or reading direction. Use this for format changes like story (1080×1920), post (1080×1350), landscape (1920×1080) — never stretch layers to fake a format. Background accepts a CSS color or \"transparent\". Set `direction` to \"rtl\" for right-to-left layouts (e.g. Arabic, Hebrew) so align_layer's start/end place layers correctly; it defaults to \"ltr\". Layer coordinates are artboard-relative, so re-read the canvas state and reposition layers after resizing.",
     inputSchema: {
       type: "object",
       properties: {
         width: { type: "number" },
         height: { type: "number" },
         background: { type: "string" },
+        direction: { type: "string", enum: ["ltr", "rtl"] },
       },
       additionalProperties: false,
     },
@@ -605,6 +609,7 @@ export async function executeTool(
         width?: number;
         height?: number;
         background?: string;
+        direction?: "ltr" | "rtl";
       };
       const res = ctx.agentSetArtboard(opts);
       if (!res.ok) return { content: res.error ?? "Failed", isError: true };
@@ -612,7 +617,7 @@ export async function executeTool(
         opts.width || opts.height ? ` ${opts.width ?? "·"}×${opts.height ?? "·"}` : "";
       return {
         content: JSON.stringify({ ok: true }),
-        label: `Set artboard${size}${opts.background ? ` · ${opts.background}` : ""}`,
+        label: `Set artboard${size}${opts.background ? ` · ${opts.background}` : ""}${opts.direction ? ` · ${opts.direction}` : ""}`,
         mutated: true,
       };
     }

@@ -49,11 +49,35 @@ import {
 
 const ARTBOARD_ID = "__artboard__";
 const ARTBOARD_PLACEHOLDER_FILL = "#13131c";
-const EXTRA_PROPS = ["id", "name", "selectable", "evented", "bgTransparent"];
+const EXTRA_PROPS = [
+  "id",
+  "name",
+  "selectable",
+  "evented",
+  "bgTransparent",
+  "direction",
+];
 const MAX_HISTORY = 50;
 const GRID_BASE = 24;
 
-type Meta = { id?: string; name?: string; bgTransparent?: boolean };
+/** Right-pointing arrow outline (points), shared by the user + agent creators. */
+const ARROW_POINTS = [
+  { x: 0, y: 40 },
+  { x: 110, y: 40 },
+  { x: 110, y: 8 },
+  { x: 200, y: 60 },
+  { x: 110, y: 112 },
+  { x: 110, y: 80 },
+  { x: 0, y: 80 },
+];
+
+/** `direction` lives on the artboard object as a document-level property. */
+type Meta = {
+  id?: string;
+  name?: string;
+  bgTransparent?: boolean;
+  direction?: "ltr" | "rtl";
+};
 const meta = (o: FabricObject) => o as FabricObject & Meta;
 const uid = () =>
   typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -604,18 +628,7 @@ export function useEditor() {
         shape = new Ellipse({ ...base, rx: 180, ry: 130 });
         meta(shape).name = "Ellipse";
       } else if (kind === "arrow") {
-        shape = new Polygon(
-          [
-            { x: 0, y: 40 },
-            { x: 110, y: 40 },
-            { x: 110, y: 8 },
-            { x: 200, y: 60 },
-            { x: 110, y: 112 },
-            { x: 110, y: 80 },
-            { x: 0, y: 80 },
-          ],
-          base,
-        );
+        shape = new Polygon(ARROW_POINTS, base);
         meta(shape).name = "Arrow";
       } else {
         shape = new Rect({ ...base, width: 360, height: 260 });
@@ -972,6 +985,45 @@ export function useEditor() {
     [sceneObjects],
   );
 
+  /** Resolve ids to their objects + axis-aligned boxes for the layout ops
+   *  (distribute/grid). Fails on the first missing id. */
+  const collectBoxes = useCallback(
+    (
+      c: Canvas,
+      ids: string[],
+    ):
+      | { ok: true; objById: Map<string, FabricObject>; boxes: LayoutBox[] }
+      | { ok: false; error: string } => {
+      const objById = new Map<string, FabricObject>();
+      const boxes: LayoutBox[] = [];
+      for (const id of ids) {
+        const o = layerById(c, id);
+        if (!o) return { ok: false, error: `No layer with id "${id}"` };
+        objById.set(id, o);
+        const r = o.getBoundingRect();
+        const ctr = o.getCenterPoint();
+        boxes.push({ id, cx: ctr.x, cy: ctr.y, w: r.width, h: r.height });
+      }
+      return { ok: true, objById, boxes };
+    },
+    [layerById],
+  );
+
+  /** Move each resolved object to its computed center (shared apply step). */
+  const applyCenters = useCallback(
+    (
+      objById: Map<string, FabricObject>,
+      placements: { id: string; cx: number; cy: number }[],
+    ) => {
+      for (const p of placements) {
+        const o = objById.get(p.id)!;
+        o.setPositionByOrigin(new Point(p.cx, p.cy), "center", "center");
+        o.setCoords();
+      }
+    },
+    [],
+  );
+
   /* One agent turn = one undo step: restoringRef suppresses the per-op
    * saveState calls fired by object:added/removed/modified; endAgentTurn
    * takes the single snapshot. Canvas input is blocked in the UI while a
@@ -1085,6 +1137,7 @@ export function useEditor() {
           artboardBgRef.current === null
             ? "transparent"
             : artboardBgRef.current,
+        direction: meta(ab).direction ?? "ltr",
       },
       layers,
     };
@@ -1380,18 +1433,7 @@ export function useEditor() {
         });
         meta(shape).name = "Ellipse";
       } else if (kind === "arrow") {
-        shape = new Polygon(
-          [
-            { x: 0, y: 40 },
-            { x: 110, y: 40 },
-            { x: 110, y: 8 },
-            { x: 200, y: 60 },
-            { x: 110, y: 112 },
-            { x: 110, y: 80 },
-            { x: 0, y: 80 },
-          ],
-          base,
-        );
+        shape = new Polygon(ARROW_POINTS, base);
         meta(shape).name = "Arrow";
         if (opts.width) shape.set({ scaleX: opts.width / shape.width! });
         if (opts.height) shape.set({ scaleY: opts.height / shape.height! });
@@ -1485,9 +1527,14 @@ export function useEditor() {
       const ctr = obj.getCenterPoint();
       let x = ctr.x;
       let y = ctr.y;
-      if (opts.horizontal === "left") x = margin + w / 2;
-      else if (opts.horizontal === "center") x = abW / 2;
-      else if (opts.horizontal === "right") x = abW - margin - w / 2;
+      // Resolve RTL-aware start/end to the concrete left/right below.
+      const dir = meta(ab).direction ?? "ltr";
+      let horizontal = opts.horizontal;
+      if (horizontal === "start") horizontal = dir === "rtl" ? "right" : "left";
+      else if (horizontal === "end") horizontal = dir === "rtl" ? "left" : "right";
+      if (horizontal === "left") x = margin + w / 2;
+      else if (horizontal === "center") x = abW / 2;
+      else if (horizontal === "right") x = abW - margin - w / 2;
       if (opts.vertical === "top") y = margin + h / 2;
       else if (opts.vertical === "middle") y = abH / 2;
       else if (opts.vertical === "bottom") y = abH - margin - h / 2;
@@ -1516,22 +1563,10 @@ export function useEditor() {
       if (!c) return { ok: false, error: "Editor not ready" };
       if (!Array.isArray(ids) || ids.length < 2)
         return { ok: false, error: "Provide at least 2 layer ids" };
-      const objById = new Map<string, NonNullable<ReturnType<typeof layerById>>>();
-      const boxes: LayoutBox[] = [];
-      for (const id of ids) {
-        const o = layerById(c, id);
-        if (!o) return { ok: false, error: `No layer with id "${id}"` };
-        objById.set(id, o);
-        const r = o.getBoundingRect();
-        const ctr = o.getCenterPoint();
-        boxes.push({ id, cx: ctr.x, cy: ctr.y, w: r.width, h: r.height });
-      }
-      const placements = computeDistribute(boxes, axis, gap);
-      for (const p of placements) {
-        const o = objById.get(p.id)!;
-        o.setPositionByOrigin(new Point(p.cx, p.cy), "center", "center");
-        o.setCoords();
-      }
+      const collected = collectBoxes(c, ids);
+      if (!collected.ok) return { ok: false, error: collected.error };
+      const placements = computeDistribute(collected.boxes, axis, gap);
+      applyCenters(collected.objById, placements);
       c.requestRenderAll();
       refreshLayers();
       return {
@@ -1543,7 +1578,7 @@ export function useEditor() {
         })),
       };
     },
-    [layerById, refreshLayers],
+    [collectBoxes, applyCenters, refreshLayers],
   );
 
   // Lay several layers out on a tidy grid (position only; sizes unchanged).
@@ -1564,28 +1599,16 @@ export function useEditor() {
       if (!c || !ab) return { ok: false, error: "Editor not ready" };
       if (!Array.isArray(ids) || ids.length < 1)
         return { ok: false, error: "Provide at least 1 layer id" };
-      const objById = new Map<string, NonNullable<ReturnType<typeof layerById>>>();
-      const boxes: LayoutBox[] = [];
-      for (const id of ids) {
-        const o = layerById(c, id);
-        if (!o) return { ok: false, error: `No layer with id "${id}"` };
-        objById.set(id, o);
-        const r = o.getBoundingRect();
-        const ctr = o.getCenterPoint();
-        boxes.push({ id, cx: ctr.x, cy: ctr.y, w: r.width, h: r.height });
-      }
+      const collected = collectBoxes(c, ids);
+      if (!collected.ok) return { ok: false, error: collected.error };
       const g = gap ?? Math.round(Math.min(ab.width!, ab.height!) * 0.03);
       const origin =
         x != null && y != null ? { x, y } : null;
-      const { placements, box } = computeGrid(boxes, columns, g, origin, {
+      const { placements, box } = computeGrid(collected.boxes, columns, g, origin, {
         width: ab.width!,
         height: ab.height!,
       });
-      for (const p of placements) {
-        const o = objById.get(p.id)!;
-        o.setPositionByOrigin(new Point(p.cx, p.cy), "center", "center");
-        o.setCoords();
-      }
+      applyCenters(collected.objById, placements);
       c.requestRenderAll();
       refreshLayers();
       return {
@@ -1598,7 +1621,7 @@ export function useEditor() {
         },
       };
     },
-    [layerById, refreshLayers],
+    [collectBoxes, applyCenters, refreshLayers],
   );
 
   // Normalize an image into a target box: contain / cover (crop) / fill.
@@ -1812,6 +1835,7 @@ export function useEditor() {
       width?: number;
       height?: number;
       background?: string;
+      direction?: "ltr" | "rtl";
     }): { ok: boolean; error?: string } => {
       const ab = artboardRef.current;
       if (!canvasRef.current || !ab)
@@ -1824,10 +1848,16 @@ export function useEditor() {
           opts.background === "transparent" ? null : opts.background,
         );
       }
+      if (opts.direction !== undefined) {
+        // Document-level property on the artboard object (see EXTRA_PROPS);
+        // start/end alignment resolves against it, RTL-aware.
+        meta(ab).direction = opts.direction;
+        saveState();
+      }
       refreshLayers();
       return { ok: true };
     },
-    [applyCustomSize, setArtboardBg, refreshLayers],
+    [applyCustomSize, setArtboardBg, saveState, refreshLayers],
   );
 
   const exportPNG = useCallback(() => {

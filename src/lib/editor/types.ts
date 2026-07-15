@@ -125,7 +125,13 @@ export interface AgentLayerSnapshot {
 }
 
 export interface AgentCanvasState {
-  artboard: { width: number; height: number; background: string };
+  artboard: {
+    width: number;
+    height: number;
+    background: string;
+    /** Document reading direction; align_layer start/end resolve against it. */
+    direction: "ltr" | "rtl";
+  };
   /** Topmost layer first (same order as the layers panel). */
   layers: AgentLayerSnapshot[];
 }
@@ -167,7 +173,8 @@ export interface AgentTextOptions extends AgentTextStyle {
 }
 
 export interface AgentAlignOptions {
-  horizontal?: "left" | "center" | "right";
+  /** `start`/`end` resolve to left/right by the document direction (RTL-aware). */
+  horizontal?: "left" | "center" | "right" | "start" | "end";
   vertical?: "top" | "middle" | "bottom";
   /** Distance from the artboard edge in px (default ≈5% of the artboard). */
   margin?: number;
