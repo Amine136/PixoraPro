@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Loader2, Send, Sparkles, Square, Trash2, X } from "lucide-react";
+import {
+  Loader2,
+  Send,
+  Sparkles,
+  Square,
+  Trash2,
+  TriangleAlert,
+  X,
+} from "lucide-react";
 import type { EditorApi } from "@/lib/editor/useEditor";
 import { useAgent } from "@/lib/agent/useAgent";
 
@@ -10,7 +18,7 @@ interface AgentPanelProps {
 }
 
 export function AgentPanel({ editor }: AgentPanelProps) {
-  const { items, busy, run, stop, clear } = useAgent(editor);
+  const { items, busy, confirm, run, stop, clear } = useAgent(editor);
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -126,6 +134,36 @@ export function AgentPanel({ editor }: AgentPanelProps) {
               ),
             )}
           </div>
+
+          {confirm && (
+            <div className="border-t border-amber-500/30 bg-amber-500/10 px-4 py-3">
+              <div className="flex items-start gap-2">
+                <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-400" />
+                <div className="flex flex-col gap-2">
+                  <p className="text-xs leading-relaxed text-amber-100">
+                    The assistant wants to delete {confirm.count} layers. This
+                    can be undone with a single Ctrl+Z afterwards.
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => confirm.decide(true)}
+                      className="rounded-lg bg-amber-500/90 px-3 py-1.5 text-[11px] font-medium text-zinc-950 transition-colors hover:bg-amber-400"
+                    >
+                      Delete them
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => confirm.decide(false)}
+                      className="rounded-lg bg-zinc-800/80 px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:bg-zinc-700/80"
+                    >
+                      Keep them
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <footer className="border-t border-slate-800/50 p-3">
             <div className="flex items-end gap-2">
