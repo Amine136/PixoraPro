@@ -134,6 +134,94 @@ export function computeFit(
   };
 }
 
+/** An image's native crop rectangle, in source-pixel space. */
+export interface CropRect {
+  cropX: number;
+  cropY: number;
+  width: number;
+  height: number;
+}
+
+/** Fraction (0–1) to trim off each edge of the current visible region. */
+export interface CropTrim {
+  top?: number;
+  bottom?: number;
+  left?: number;
+  right?: number;
+}
+
+/** An axis-aligned rectangle in artboard coordinates (top-left origin). */
+export interface AbsRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Convert "keep this rectangle" — stated absolutely, in artboard coordinates —
+ * into the edge fractions computeCrop wants.
+ *
+ * Absolute is the form a caller can actually reason about: it is the same space
+ * layer geometry is reported in, so a second crop can be re-derived from scratch
+ * instead of guessing fractions of a region that the first crop already moved.
+ * The rectangle is clipped to the layer's box, so overshooting an edge is
+ * harmless. Returns null when the two do not overlap at all.
+ */
+export function rectToTrim(box: AbsRect, keep: AbsRect): CropTrim | null {
+  const bx2 = box.x + box.width;
+  const by2 = box.y + box.height;
+  const kx1 = Math.max(box.x, keep.x);
+  const ky1 = Math.max(box.y, keep.y);
+  const kx2 = Math.min(bx2, keep.x + keep.width);
+  const ky2 = Math.min(by2, keep.y + keep.height);
+  if (kx2 <= kx1 || ky2 <= ky1) return null;
+  return {
+    left: (kx1 - box.x) / box.width,
+    right: (bx2 - kx2) / box.width,
+    top: (ky1 - box.y) / box.height,
+    bottom: (by2 - ky2) / box.height,
+  };
+}
+
+export interface CropResult extends CropRect {
+  /** Center shift in SOURCE pixels. The caller scales and rotates this into
+   *  canvas space; applying it keeps the retained pixels where they were. */
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Trim fractions off the edges of an image's *current* visible region.
+ *
+ * Unlike computeFit — which recomputes from the natural size so re-fitting
+ * composes — crops stack: each trim is a fraction of what is visible now, so
+ * cropping an already-cropped (or cover-fitted) image narrows it further
+ * rather than reverting it. Scale is deliberately untouched; cropping removes
+ * pixels, it does not resize the ones that remain.
+ *
+ * `dx`/`dy` express the trim's asymmetry. Trimming only the bottom returns a
+ * negative `dy` of half the removed height, which moves the center up by
+ * exactly the amount the box shrank — leaving the top edge where it was.
+ * Callers that ignore it get a box that visibly jumps.
+ *
+ * Assumes validated input: each side in [0,1), opposing pairs summing under 1.
+ */
+export function computeCrop(cur: CropRect, trim: CropTrim): CropResult {
+  const left = (trim.left ?? 0) * cur.width;
+  const right = (trim.right ?? 0) * cur.width;
+  const top = (trim.top ?? 0) * cur.height;
+  const bottom = (trim.bottom ?? 0) * cur.height;
+  return {
+    cropX: cur.cropX + left,
+    cropY: cur.cropY + top,
+    width: cur.width - left - right,
+    height: cur.height - top - bottom,
+    dx: (left - right) / 2,
+    dy: (top - bottom) / 2,
+  };
+}
+
 export interface GridResult {
   placements: Placement[];
   /** Top-left corner and total size of the laid-out grid, artboard-relative. */
@@ -172,4 +260,39 @@ export function computeGrid(
     };
   });
   return { placements, box: { x: ox, y: oy, width: gridW, height: gridH } };
+}
+
+/** Gradient endpoint coordinates in the unit box (fabric gradientUnits:
+ *  "percentage"). Linear endpoints are placed like CSS linear-gradient: the
+ *  box's extreme corners project exactly onto stops 0 and 1, so both end
+ *  colors are fully reached (for non-cardinal angles the endpoints lie
+ *  outside the box — that is correct). Angle is the flow direction in
+ *  degrees, 0 = left→right, 90 = top→bottom (y grows downward). Radial runs
+ *  from the center to the corners (r2 = √½). */
+export interface GradientCoords {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  r1?: number;
+  r2?: number;
+}
+
+export function computeGradientCoords(
+  type: "linear" | "radial",
+  angleDeg: number,
+): GradientCoords {
+  if (type === "radial")
+    return { x1: 0.5, y1: 0.5, x2: 0.5, y2: 0.5, r1: 0, r2: Math.SQRT1_2 };
+  const a = (angleDeg * Math.PI) / 180;
+  const dx = Math.cos(a);
+  const dy = Math.sin(a);
+  const l = (Math.abs(dx) + Math.abs(dy)) / 2;
+  const r = (n: number) => Math.round(n * 1e4) / 1e4 + 0; // +0 normalizes -0
+  return {
+    x1: r(0.5 - dx * l),
+    y1: r(0.5 - dy * l),
+    x2: r(0.5 + dx * l),
+    y2: r(0.5 + dy * l),
+  };
 }

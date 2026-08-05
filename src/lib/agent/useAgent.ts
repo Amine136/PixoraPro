@@ -8,6 +8,7 @@ import type {
   ToolResultPart,
 } from "./protocol";
 import { createTransport } from "./transport";
+import { compactHistory } from "./history";
 import { executeTool, SYSTEM_PROMPT, TOOL_DEFS } from "./tools";
 
 const MAX_ROUNDS = 15;
@@ -41,6 +42,7 @@ type AgentEditorApi = Pick<
   | "agentSampleColor"
   | "agentApplyToLayer"
   | "agentAdjustImage"
+  | "agentRemoveBackground"
   | "agentDuplicateLayer"
   | "agentAddText"
   | "agentAddShape"
@@ -49,26 +51,14 @@ type AgentEditorApi = Pick<
   | "agentDistributeLayers"
   | "agentArrangeGrid"
   | "agentSetImageFit"
+  | "agentCropImage"
   | "agentPlaceInCard"
   | "agentMoveLayer"
   | "agentGroupLayers"
   | "agentUngroupLayer"
   | "agentSetArtboard"
+  | "agentSetGradient"
 >;
-
-/** Screenshots are only useful in the round they were taken — strip them from
- *  older messages so history stays small on every provider. */
-function withoutStaleImages(messages: AgentMessage[]): AgentMessage[] {
-  return messages.map((m, i) => {
-    if (i === messages.length - 1) return m;
-    const parts: AgentPart[] = m.parts.map((p) =>
-      p.type === "tool_result" && p.images?.length
-        ? { ...p, images: undefined, content: p.content + " (image omitted)" }
-        : p,
-    );
-    return { ...m, parts };
-  });
-}
 
 export function useAgent(editor: AgentEditorApi) {
   const [items, setItems] = useState<ChatItem[]>([]);
@@ -76,6 +66,9 @@ export function useAgent(editor: AgentEditorApi) {
   const [confirm, setConfirm] = useState<PendingConfirm | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const conversationRef = useRef<AgentMessage[]>([]);
+  /** Canvas snapshot taken when the last agent turn ended — used to detect
+   *  out-of-band edits (manual changes, undo) that make history stale. */
+  const lastCanvasStateRef = useRef<string | null>(null);
   const transport = useMemo(() => createTransport(), []);
 
   const patchLast = useCallback((patch: Partial<ChatItem>) => {
@@ -119,9 +112,23 @@ export function useAgent(editor: AgentEditorApi) {
           });
         });
 
+      const stateNow = JSON.stringify(editor.agentGetState());
+      const changedOutside =
+        lastCanvasStateRef.current !== null &&
+        lastCanvasStateRef.current !== stateNow;
       conversationRef.current.push({
         role: "user",
-        parts: [{ type: "text", text: instruction }],
+        parts: [
+          { type: "text", text: instruction },
+          ...(changedOutside
+            ? [
+                {
+                  type: "text" as const,
+                  text: "[Pixora] The canvas was changed outside this chat since your last turn (a manual edit or an undo). Your conversation history is stale — call get_canvas_state before making any claim about, or edit to, the current canvas.",
+                },
+              ]
+            : []),
+        ],
       });
       setItems((prev) => [
         ...prev,
@@ -155,7 +162,7 @@ export function useAgent(editor: AgentEditorApi) {
           for await (const event of transport.send(
             {
               system: SYSTEM_PROMPT,
-              messages: withoutStaleImages(conversationRef.current),
+              messages: compactHistory(conversationRef.current),
               tools: TOOL_DEFS,
             },
             controller.signal,
@@ -276,10 +283,19 @@ export function useAgent(editor: AgentEditorApi) {
             const shot = editor.agentScreenshot();
             if (shot) {
               const last = results[results.length - 1];
-              last.images = [...(last.images ?? []), shot];
+              last.images = [...(last.images ?? []), shot.url];
               last.content +=
                 "\n\nAttached: automatic screenshot of the canvas after this change. Inspect it — fix alignment, overlap, contrast or sizing problems before finishing.";
             }
+          }
+
+          // Batching nudge: a single-call mutating round is the expensive
+          // failure mode (every round re-bills the whole prompt). The edit is
+          // applied — never refused, progress beats purity — and the model is
+          // told to batch whatever remains.
+          if (roundMutated && toolCalls.length === 1 && results.length > 0) {
+            results[results.length - 1].content +=
+              "\n\nNOTE: you sent only ONE tool call this round. If more edits remain, emit ALL of them as multiple tool calls in your next single response — one call per response is slow and multiplies cost.";
           }
 
           readOnlyRounds = roundMutated ? 0 : readOnlyRounds + 1;
@@ -305,6 +321,7 @@ export function useAgent(editor: AgentEditorApi) {
       } finally {
         // One undo step for everything this instruction changed
         editor.endAgentTurn(mutated);
+        lastCanvasStateRef.current = JSON.stringify(editor.agentGetState());
         setConfirm(null);
         abortRef.current = null;
         setBusy(false);
@@ -320,6 +337,7 @@ export function useAgent(editor: AgentEditorApi) {
   const clear = useCallback(() => {
     if (busy) return;
     conversationRef.current = [];
+    lastCanvasStateRef.current = null;
     setItems([]);
   }, [busy]);
 

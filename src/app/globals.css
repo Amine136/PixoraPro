@@ -28,6 +28,29 @@ body {
   background: rgba(99, 102, 241, 0.35);
 }
 
+/* Keyboard focus ring (visible, brand-tinted) */
+:focus-visible {
+  outline: 2px solid rgba(129, 140, 248, 0.75);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+button:not(:disabled),
+select {
+  cursor: pointer;
+}
+
+/* Soft depth vignette layered above the dot grid, below the UI */
+.pixora-vignette {
+  background:
+    radial-gradient(
+      1100px 700px at 50% 40%,
+      rgba(99, 102, 241, 0.05),
+      transparent 70%
+    ),
+    radial-gradient(ellipse at center, transparent 55%, rgba(0, 0, 0, 0.45) 100%);
+}
+
 /* Slim dark scrollbars for panels */
 .pixora-scroll {
   scrollbar-width: thin;

@@ -12,7 +12,7 @@ import type {
 
 const GEMINI_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const DEFAULT_MODEL = "gemini-3.1-flash-lite";
+const DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 type OaiContentPart =
   | { type: "text"; text: string }
@@ -162,8 +162,30 @@ export async function runGemini(
       message?: { content?: string | null; tool_calls?: OaiToolCall[] };
       finish_reason?: string;
     }[];
+    usage?: {
+      prompt_tokens?: number;
+      completion_tokens?: number;
+      total_tokens?: number;
+      prompt_tokens_details?: { cached_tokens?: number };
+    };
   };
+  // Cost visibility: cached prompt tokens are billed at a steep discount, so
+  // the cache-hit rate — not raw prompt_tokens — is what decides real cost.
   const choice = body.choices?.[0];
+  if (body.usage) {
+    const u = body.usage;
+    const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
+    const prompt = u.prompt_tokens ?? 0;
+    const pct = prompt > 0 ? Math.round((cached / prompt) * 100) : 0;
+    const calls = (choice?.message?.tool_calls ?? [])
+      .map((c) => c.function.name)
+      .join(",");
+    console.log(
+      `[agent/gemini] in=${prompt} (cached=${cached}, ${pct}% hit) out=${u.completion_tokens ?? 0} tools=[${calls}]`,
+    );
+  } else {
+    console.log("[agent/gemini] no usage block in response");
+  }
   if (!choice?.message) {
     return [{ type: "error", message: "Gemini returned no choices" }];
   }

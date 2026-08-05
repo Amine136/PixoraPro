@@ -29,10 +29,10 @@ Swapping providers or pointing at the parent system is a one-file change
 - **Protocol + transport** — neutral `AgentMessage` / `ToolDef` / streamed
   events as NDJSON, incl. `done{stopReason}` and `error{retryable}`;
   `HttpTransport` switches gateway vs local `/api/agent` by env.
-- **18 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
+- **19 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
   create: `add_text`, `add_shape`; modify: `set_properties`, `adjust_image`,
   `align_layer`, `distribute_layers`, `arrange_grid`, `set_image_fit`,
-  `place_in_card`, `move_layer` (z-order), `duplicate_layer`; structure:
+  `place_in_card`, `set_gradient`, `move_layer` (z-order), `duplicate_layer`; structure:
   `group_layers`, `ungroup_layer`; remove: `delete_layer`; canvas: `set_artboard`.
   Layout + image-fit math is pure and unit-tested in `src/lib/editor/layout.ts`;
   `set_image_fit` cover uses native crop (not clipPath) so bounds stay honest.
@@ -45,6 +45,26 @@ Swapping providers or pointing at the parent system is a one-file change
   export/download not exposed; brush/eraser excluded by design.
 - **Reliability** — duplicate-call guard, read-only stall-breaker, auto
   screenshot verification after mutating rounds.
+- **Gradients** — `set_gradient` fills a layer or the artboard bg with a 2–3
+  stop linear/radial fabric Gradient (percentage units; CSS-style endpoint math
+  is pure `computeGradientCoords` in `layout.ts`). A human-readable descriptor
+  is stored in object meta (`gradient` in `EXTRA_PROPS`) so `get_canvas_state`
+  can report gradient fills; solid-fill writes clear it. Rejected for images
+  and groups with actionable errors.
+- **Stale-history defense** — the canvas can change between turns (manual
+  edits, user undo). `useAgent` snapshots the canvas at end of turn; if it
+  differs at the next instruction, a `[Pixora]` note is attached telling the
+  model to re-read state, backed by a prompt rule (never claim canvas content
+  from memory). Prompt also carries a design-ambition rule (complete
+  compositions from a bigger one-batch plan, not extra correction rounds).
+- **History compaction** — the model payload is capped per turn, not per raw
+  message (`compactHistory` in `src/lib/agent/history.ts`, pure + unit-tested):
+  current turn intact; the 5 turns before it keep tool-call structure (and
+  provider signatures) but long tool-result bodies are truncated; older turns
+  are reduced to text only (instruction + final answer), dropping call/result
+  pairs together so pairing never breaks. Images survive only on the latest
+  message (absorbed the old `withoutStaleImages`). The UI transcript stays
+  complete — only what's sent to the model shrinks.
 
 ---
 

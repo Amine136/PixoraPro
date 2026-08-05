@@ -42,8 +42,8 @@ export function LayersPanel({
   const [overIdx, setOverIdx] = useState<number | null>(null);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/60 bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
-      <header className="flex items-center gap-2 border-b border-slate-800/50 px-4 py-3">
+    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
+      <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
         <Layers className="size-4 text-indigo-400" />
         <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
           Layers
@@ -107,7 +107,7 @@ export function LayersPanel({
                   alt=""
                   draggable={false}
                   className={`h-7 w-10 shrink-0 rounded-md object-cover ring-1 ring-inset ${
-                    layer.selected ? "ring-indigo-500/60" : "ring-slate-700/50"
+                    layer.selected ? "ring-indigo-500/60" : "ring-white/10"
                   }`}
                 />
               ) : (

@@ -194,7 +194,18 @@ export interface AgentShapeOptions {
   cornerRadius?: number;
 }
 
+/** Web fonts first (loaded via layout.tsx + lib/editor/fonts.ts, grouped by
+ *  role: display, condensed, script, serif, sans), then system fallbacks. */
 export const FONT_FAMILIES = [
+  "Anton",
+  "Bebas Neue",
+  "Alfa Slab One",
+  "Oswald",
+  "Pacifico",
+  "Caveat",
+  "Playfair Display",
+  "Montserrat",
+  "Poppins",
   "Arial",
   "Impact",
   "Georgia",

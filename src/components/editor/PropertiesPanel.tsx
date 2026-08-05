@@ -6,13 +6,17 @@ import {
   AlignLeft,
   AlignRight,
   Ban,
+  Crop,
   Eraser,
   Frame,
   Group as GroupIcon,
   Laugh,
+  Loader2,
   Paintbrush,
   RotateCcw,
+  Scissors,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   Ungroup,
 } from "lucide-react";
@@ -37,6 +41,12 @@ interface PropertiesPanelProps {
   onUpdate: (patch: Record<string, unknown>) => void;
   onAdjust: (patch: Partial<ImageAdjustments>) => void;
   onMemePreset: () => void;
+  onRemoveBackground: (mode?: "auto" | "ai") => void;
+  cropping: boolean;
+  onCropStart: () => void;
+  onCropApply: () => void;
+  onCropCancel: () => void;
+  bgRemoving: boolean;
   onGroup: () => void;
   onUngroup: () => void;
   onDelete: () => void;
@@ -65,7 +75,7 @@ function Header({
   badge?: string;
 }) {
   return (
-    <header className="flex items-center gap-2 border-b border-slate-800/50 px-4 py-3">
+    <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
       <Icon className="size-4 text-indigo-400" />
       <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
         {title}
@@ -109,7 +119,7 @@ function AdjustmentSlider({
 }
 
 const glass =
-  "rounded-2xl border border-slate-800/60 bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl";
+  "rounded-2xl border border-white/[0.08] bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl";
 
 const BRUSH_TYPES: { id: BrushType; label: string }[] = [
   { id: "pencil", label: "Solid" },
@@ -129,6 +139,12 @@ export function PropertiesPanel({
   onUpdate,
   onAdjust,
   onMemePreset,
+  onRemoveBackground,
+  cropping,
+  onCropStart,
+  onCropApply,
+  onCropCancel,
+  bgRemoving,
   onGroup,
   onUngroup,
   onDelete,
@@ -138,6 +154,43 @@ export function PropertiesPanel({
   useEffect(() => {
     if (!image) setTab("style");
   }, [image]);
+
+  /* --- Interactive crop mode (modal: trumps every other panel) --- */
+  if (cropping) {
+    return (
+      <section className={glass}>
+        <Header icon={Crop} title="Crop" />
+        <div className="flex flex-col gap-3 p-4">
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            Drag the handles to choose what to keep — the dimmed area gets cut
+            away. Drag inside the frame to move it.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={onCropCancel}
+              className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] text-[11px] font-medium text-zinc-400 transition-colors hover:text-zinc-200"
+            >
+              Cancel
+              <kbd className="rounded bg-zinc-800 px-1 font-mono text-[10px] text-zinc-500">
+                Esc
+              </kbd>
+            </button>
+            <button
+              type="button"
+              onClick={onCropApply}
+              className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-indigo-500/80 text-[11px] font-semibold text-white transition-colors hover:bg-indigo-500"
+            >
+              Apply
+              <kbd className="rounded bg-indigo-400/30 px-1 font-mono text-[10px] text-indigo-100">
+                ↵
+              </kbd>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   /* --- Eraser settings (eraser tool active; selection stays live) --- */
   if (tool === "eraser") {
@@ -181,7 +234,7 @@ export function PropertiesPanel({
         <Header icon={Paintbrush} title="Brush" />
         <div className="flex flex-col gap-3 p-4">
           <Row label="Type">
-            <div className="flex w-full overflow-hidden rounded-lg border border-slate-800/60">
+            <div className="flex w-full overflow-hidden rounded-lg border border-white/[0.08]">
               {BRUSH_TYPES.map(({ id, label }) => (
                 <button
                   key={id}
@@ -258,7 +311,7 @@ export function PropertiesPanel({
             className={`flex h-9 items-center justify-center gap-2 rounded-xl border text-xs font-medium transition-colors ${
               artboardBg === null
                 ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
-                : "border-slate-800/60 bg-zinc-950/40 text-zinc-400 hover:border-slate-700 hover:text-zinc-200"
+                : "border-white/[0.08] bg-zinc-950/40 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
             }`}
           >
             <Ban className="size-3.5" />
@@ -291,7 +344,7 @@ export function PropertiesPanel({
       />
 
       {image && (
-        <div className="flex gap-1 border-b border-slate-800/50 px-3 py-2">
+        <div className="flex gap-1 border-b border-white/[0.06] px-3 py-2">
           {(
             [
               ["style", "Style"],
@@ -342,7 +395,7 @@ export function PropertiesPanel({
               image.contrast === 0 &&
               image.saturation === 0
             }
-            className="mt-1 flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-800/60 bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-slate-700 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+            className="mt-1 flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
           >
             <RotateCcw className="size-3.5" />
             Reset adjustments
@@ -367,9 +420,45 @@ export function PropertiesPanel({
             </span>
           </Row>
 
+          {image && selection.count === 1 && (
+            <div className="mt-1 flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={() => onRemoveBackground("auto")}
+                disabled={bgRemoving}
+                className="flex h-9 items-center justify-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-xs font-semibold text-indigo-300 transition-colors hover:bg-indigo-500/20 disabled:pointer-events-none disabled:opacity-60"
+              >
+                {bgRemoving ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Scissors className="size-4" />
+                )}
+                {bgRemoving ? "Working…" : "Remove background"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onRemoveBackground("ai")}
+                disabled={bgRemoving}
+                title="AI subject detection — removes any background, even complex ones. Slower."
+                className="flex h-8 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-[11px] font-medium text-zinc-400 transition-colors hover:border-indigo-500/40 hover:text-indigo-300 disabled:pointer-events-none disabled:opacity-60"
+              >
+                <Sparkles className="size-3.5" />
+                Cut out subject (AI)
+              </button>
+              <button
+                type="button"
+                onClick={onCropStart}
+                className="flex h-8 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-[11px] font-medium text-zinc-400 transition-colors hover:border-indigo-500/40 hover:text-indigo-300"
+              >
+                <Crop className="size-3.5" />
+                Crop
+              </button>
+            </div>
+          )}
+
           {shape && (
             <>
-              <div className="my-1 h-px bg-slate-800/50" aria-hidden />
+              <div className="my-1 h-px bg-white/[0.06]" aria-hidden />
               <Row label="Fill">
                 <span className="font-mono text-[11px] text-zinc-500">
                   {shape.fill || "none"}
@@ -410,13 +499,13 @@ export function PropertiesPanel({
 
           {text && (
             <>
-              <div className="my-1 h-px bg-slate-800/50" aria-hidden />
+              <div className="my-1 h-px bg-white/[0.06]" aria-hidden />
 
               <Row label="Font">
                 <select
                   value={text.fontFamily}
                   onChange={(e) => onUpdate({ fontFamily: e.target.value })}
-                  className="h-8 w-full rounded-lg border border-slate-800/60 bg-zinc-950/60 px-2 text-xs text-zinc-300 outline-none transition-colors hover:border-slate-700 focus-visible:border-indigo-500"
+                  className="h-8 w-full rounded-lg border border-white/[0.08] bg-zinc-950/60 px-2 text-xs text-zinc-300 outline-none transition-colors hover:border-white/20 focus-visible:border-indigo-500"
                   aria-label="Font family"
                 >
                   {!FONT_FAMILIES.includes(text.fontFamily) && (
@@ -450,13 +539,13 @@ export function PropertiesPanel({
                   onChange={(e) =>
                     onUpdate({ fontSize: Math.max(1, Number(e.target.value)) })
                   }
-                  className="h-8 w-14 shrink-0 rounded-lg border border-slate-800/60 bg-zinc-950/60 px-2 text-right font-mono text-xs text-zinc-300 outline-none focus-visible:border-indigo-500"
+                  className="h-8 w-14 shrink-0 rounded-lg border border-white/[0.08] bg-zinc-950/60 px-2 text-right font-mono text-xs text-zinc-300 outline-none focus-visible:border-indigo-500"
                   aria-label="Font size value"
                 />
               </Row>
 
               <Row label="Align">
-                <div className="flex overflow-hidden rounded-lg border border-slate-800/60">
+                <div className="flex overflow-hidden rounded-lg border border-white/[0.08]">
                   {(
                     [
                       ["left", AlignLeft],
@@ -563,7 +652,7 @@ export function PropertiesPanel({
           <button
             type="button"
             onClick={onDelete}
-            className="flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-800/60 bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
+            className="flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
           >
             <Trash2 className="size-3.5" />
             Delete{" "}

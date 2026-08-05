@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ImagePlus, Maximize, Minus, Plus } from "lucide-react";
 import { useEditor } from "@/lib/editor/useEditor";
 import { TopBar } from "./TopBar";
@@ -12,6 +12,14 @@ import { AgentPanel } from "./AgentPanel";
 export default function Editor() {
   const editor = useEditor();
   const [dropping, setDropping] = useState(false);
+
+  // Dev-only handle so the agent's canvas tools can be driven from a browser
+  // harness (or the console) without spending a model call — see the C2b eval
+  // case. The NODE_ENV check strips it from production builds.
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    (window as unknown as { __pixora?: unknown }).__pixora = editor;
+  }, [editor]);
 
   return (
     <div
@@ -30,6 +38,9 @@ export default function Editor() {
     >
       {/* Infinite workspace — Fabric mounts its canvas inside this element */}
       <div ref={editor.containerRef} className="pixora-workspace absolute inset-0" />
+
+      {/* Depth vignette (separate element: JS drives the grid's background props) */}
+      <div className="pixora-vignette pointer-events-none absolute inset-0" aria-hidden />
 
       {/* Smart-guide lines, positioned imperatively while dragging */}
       <div
@@ -89,6 +100,12 @@ export default function Editor() {
           onUpdate={editor.updateSelected}
           onAdjust={editor.updateImageAdjustments}
           onMemePreset={editor.applyMemePreset}
+          onRemoveBackground={editor.removeSelectedBackground}
+          cropping={editor.cropping}
+          onCropStart={editor.startCropMode}
+          onCropApply={editor.applyCropMode}
+          onCropCancel={editor.cancelCropMode}
+          bgRemoving={editor.bgRemoving}
           onGroup={editor.groupSelected}
           onUngroup={editor.ungroupSelected}
           onDelete={editor.deleteSelected}
@@ -106,7 +123,7 @@ export default function Editor() {
       <AgentPanel editor={editor} />
 
       {/* Zoom pill */}
-      <div className="pointer-events-auto absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-slate-800/60 bg-zinc-900/60 p-1 shadow-2xl shadow-black/40 backdrop-blur-xl">
+      <div className="pointer-events-auto absolute bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-0.5 rounded-xl border border-white/[0.08] bg-zinc-900/60 p-1 shadow-2xl shadow-black/40 backdrop-blur-xl">
         <button
           type="button"
           onClick={() => editor.zoomBy(1 / 1.2)}
@@ -126,7 +143,7 @@ export default function Editor() {
         >
           <Plus className="size-3.5" />
         </button>
-        <div className="mx-0.5 h-4 w-px bg-slate-800/70" aria-hidden />
+        <div className="mx-0.5 h-4 w-px bg-white/[0.08]" aria-hidden />
         <button
           type="button"
           onClick={editor.fitToArtboard}
@@ -140,20 +157,22 @@ export default function Editor() {
       {/* Empty-state hint */}
       {editor.ready && editor.layers.length === 0 && editor.tool !== "brush" && (
         <div className="pointer-events-none absolute bottom-12 left-[88px] right-[320px] top-24 z-20 flex items-center justify-center">
-          <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-slate-700/60 bg-zinc-900/40 px-10 py-8 text-center backdrop-blur-sm">
-            <div className="flex size-11 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500/20 to-violet-600/20 text-indigo-300">
+          <div className="flex flex-col items-center gap-4 rounded-3xl border border-white/[0.08] bg-zinc-950/85 px-12 py-9 text-center shadow-2xl shadow-black/50 backdrop-blur-md">
+            <div className="flex size-12 items-center justify-center rounded-2xl bg-gradient-to-br from-indigo-500/25 to-violet-600/25 text-indigo-300 ring-1 ring-inset ring-indigo-400/20">
               <ImagePlus className="size-5" />
             </div>
-            <p className="text-sm font-medium text-zinc-300">
-              Drop images anywhere to start
-            </p>
-            <p className="text-xs text-zinc-500">
-              Paste from clipboard, or press{" "}
-              <kbd className="rounded bg-zinc-800 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
-                T
-              </kbd>{" "}
-              to add text
-            </p>
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-semibold text-zinc-100">
+                Drop images anywhere to start
+              </p>
+              <p className="text-xs text-zinc-400">
+                Paste from clipboard, or press{" "}
+                <kbd className="rounded-md border border-white/10 bg-white/[0.06] px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">
+                  T
+                </kbd>{" "}
+                to add text
+              </p>
+            </div>
           </div>
         </div>
       )}

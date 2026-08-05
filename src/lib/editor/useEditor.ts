@@ -8,6 +8,7 @@ import {
   Ellipse,
   FabricImage,
   FabricObject,
+  Gradient,
   Group,
   IText,
   InteractiveFabricObject,
@@ -40,14 +41,29 @@ import {
   type Tool,
 } from "./types";
 import {
+  computeCrop,
   computeDistribute,
   computeFit,
+  computeGradientCoords,
   computeGrid,
+  rectToTrim,
+  type AbsRect,
+  type CropTrim,
   type FitMode,
   type LayoutBox,
 } from "./layout";
+import { loadEditorFonts } from "./fonts";
+import {
+  borderAlphaClearedFraction,
+  removeBackgroundAI,
+  removeBackgroundPixels,
+} from "./removeBackground";
 
 const ARTBOARD_ID = "__artboard__";
+const CROP_RECT_ID = "__crop_rect__";
+/** Canvas objects that are editor chrome, not user content: never listed as
+ *  layers, never snapshotted into history. */
+const INTERNAL_IDS = new Set([ARTBOARD_ID, CROP_RECT_ID]);
 const ARTBOARD_PLACEHOLDER_FILL = "#13131c";
 const EXTRA_PROPS = [
   "id",
@@ -56,6 +72,7 @@ const EXTRA_PROPS = [
   "evented",
   "bgTransparent",
   "direction",
+  "gradient",
 ];
 const MAX_HISTORY = 50;
 const GRID_BASE = 24;
@@ -77,6 +94,9 @@ type Meta = {
   name?: string;
   bgTransparent?: boolean;
   direction?: "ltr" | "rtl";
+  /** Human-readable descriptor of a gradient fill (the fill itself is a
+   *  fabric Gradient object, which snapshots can't express as a string). */
+  gradient?: string;
 };
 const meta = (o: FabricObject) => o as FabricObject & Meta;
 const uid = () =>
@@ -109,6 +129,114 @@ function applyFit(
   img.setPositionByOrigin(ctr, "center", "center");
   img.setCoords();
 }
+
+/** Trim fractions off an image's edges via native crop (see computeCrop).
+ *  Reads the CURRENT crop rect, not the natural size, so crops compose. Scale
+ *  is left alone — the layer gets smaller, the pixels don't. The retained
+ *  region keeps its place on canvas: the center is shifted by the trim
+ *  asymmetry (rotated into canvas space), so cropping the bottom off an image
+ *  leaves its top edge exactly where it was. */
+function applyCrop(img: FabricImage, trim: CropTrim) {
+  const c = computeCrop(
+    {
+      cropX: img.cropX ?? 0,
+      cropY: img.cropY ?? 0,
+      width: img.width!,
+      height: img.height!,
+    },
+    trim,
+  );
+  const ctr = img.getCenterPoint();
+  img.set({ cropX: c.cropX, cropY: c.cropY, width: c.width, height: c.height });
+  const dx = c.dx * (img.scaleX ?? 1);
+  const dy = c.dy * (img.scaleY ?? 1);
+  const rad = ((img.angle ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  img.setPositionByOrigin(
+    new Point(ctr.x + dx * cos - dy * sin, ctr.y + dx * sin + dy * cos),
+    "center",
+    "center",
+  );
+  img.setCoords();
+}
+
+/* Interactive crop mode: the crop frame shares the image's angle, so in the
+ * image's "display frame" (axes along its rotation, origin at its center,
+ * units = scene px) both are plain axis-aligned boxes. Stroke is deliberately
+ * ignored — all measurements use base width × scale. */
+const MIN_CROP_PX = 8;
+
+function cropDisplayBox(img: FabricImage, rect: Rect) {
+  const ic = img.getCenterPoint();
+  const rc = rect.getCenterPoint();
+  const rad = ((img.angle ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const dx = rc.x - ic.x;
+  const dy = rc.y - ic.y;
+  return {
+    cx: dx * cos + dy * sin,
+    cy: -dx * sin + dy * cos,
+    w: rect.width! * (rect.scaleX ?? 1),
+    h: rect.height! * (rect.scaleY ?? 1),
+    W: img.width! * (img.scaleX ?? 1),
+    H: img.height! * (img.scaleY ?? 1),
+  };
+}
+
+/** Keep the crop frame inside the image and above a minimum size. While
+ *  scaling, an overflowing edge pins to the image bound so the anchored
+ *  opposite edge stays where the user left it; while moving, the frame keeps
+ *  its size and slides. Adjusts scale rather than base size so fabric's
+ *  in-flight transform math (which captured the base dims on mousedown)
+ *  stays consistent. */
+function clampCropRect(img: FabricImage, rect: Rect, mode: "move" | "scale") {
+  const b = cropDisplayBox(img, rect);
+  let w: number;
+  let h: number;
+  let cx = b.cx;
+  let cy = b.cy;
+  if (mode === "scale") {
+    const l = Math.max(b.cx - b.w / 2, -b.W / 2);
+    const r = Math.min(b.cx + b.w / 2, b.W / 2);
+    const t = Math.max(b.cy - b.h / 2, -b.H / 2);
+    const btm = Math.min(b.cy + b.h / 2, b.H / 2);
+    w = Math.max(r - l, Math.min(MIN_CROP_PX, b.W));
+    h = Math.max(btm - t, Math.min(MIN_CROP_PX, b.H));
+    cx = (l + r) / 2;
+    cy = (t + btm) / 2;
+  } else {
+    w = Math.min(b.w, b.W);
+    h = Math.min(b.h, b.H);
+  }
+  const maxX = (b.W - w) / 2;
+  const maxY = (b.H - h) / 2;
+  cx = Math.min(maxX, Math.max(-maxX, cx));
+  cy = Math.min(maxY, Math.max(-maxY, cy));
+  rect.set({ scaleX: w / rect.width!, scaleY: h / rect.height! });
+  const rad = ((img.angle ?? 0) * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const ic = img.getCenterPoint();
+  rect.setPositionByOrigin(
+    new Point(ic.x + cx * cos - cy * sin, ic.y + cx * sin + cy * cos),
+    "center",
+    "center",
+  );
+  rect.setCoords();
+}
+
+type CropSession = {
+  img: FabricImage;
+  rect: Rect;
+  restore: { obj: FabricObject; selectable?: boolean; evented?: boolean }[];
+  prevSelection: boolean;
+  prevUniform: boolean;
+  onMoving: () => void;
+  onScaling: () => void;
+  onDeselect: () => void;
+};
 
 /* Selection chrome: white circular handles with an indigo ring */
 InteractiveFabricObject.ownDefaults = {
@@ -160,9 +288,16 @@ const THUMB_H = 44;
 
 function makeThumb(img: FabricImage): string | undefined {
   const el = img.getElement() as HTMLImageElement | HTMLCanvasElement;
-  const sw = "naturalWidth" in el ? el.naturalWidth : el.width;
-  const sh = "naturalHeight" in el ? el.naturalHeight : el.height;
-  if (!sw || !sh) return undefined;
+  const natW = "naturalWidth" in el ? el.naturalWidth : el.width;
+  const natH = "naturalHeight" in el ? el.naturalHeight : el.height;
+  if (!natW || !natH) return undefined;
+  // Thumbnail what the layer actually shows, not the whole source: honor the
+  // native crop rect so a cropped (or cover-fitted) image doesn't keep
+  // displaying the pixels it discarded.
+  const sx = img.cropX ?? 0;
+  const sy = img.cropY ?? 0;
+  const sw = img.width || natW;
+  const sh = img.height || natH;
   const c = document.createElement("canvas");
   c.width = THUMB_W;
   c.height = THUMB_H;
@@ -172,7 +307,17 @@ function makeThumb(img: FabricImage): string | undefined {
   const scale = Math.max(THUMB_W / sw, THUMB_H / sh);
   const dw = sw * scale;
   const dh = sh * scale;
-  ctx.drawImage(el, (THUMB_W - dw) / 2, (THUMB_H - dh) / 2, dw, dh);
+  ctx.drawImage(
+    el,
+    sx,
+    sy,
+    sw,
+    sh,
+    (THUMB_W - dw) / 2,
+    (THUMB_H - dh) / 2,
+    dw,
+    dh,
+  );
   return c.toDataURL("image/png");
 }
 
@@ -239,6 +384,13 @@ export function useEditor() {
   const historyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const thumbCacheRef = useRef<Map<string, string>>(new Map());
 
+  // Interactive crop mode (see startCropMode). Refs so long-lived closures
+  // (keyboard handler, undo, setTool) reach the current session and actions
+  // without re-binding.
+  const cropSessionRef = useRef<CropSession | null>(null);
+  const cancelCropRef = useRef<() => void>(() => {});
+  const applyCropRef = useRef<() => void>(() => {});
+
   const [ready, setReady] = useState(false);
   const [tool, setToolState] = useState<Tool>("select");
   const [layers, setLayers] = useState<LayerItem[]>([]);
@@ -252,6 +404,11 @@ export function useEditor() {
     isGroup: false,
   });
   const [zoomPct, setZoomPct] = useState(100);
+  // True while a manual (non-agent) background removal is running — the AI
+  // model download can take seconds, so the UI disables its button meanwhile.
+  const [bgRemoving, setBgRemoving] = useState(false);
+  // True while the interactive crop overlay is on the canvas
+  const [cropping, setCropping] = useState(false);
   const [canUndo, setCanUndo] = useState(false);
   const [canRedo, setCanRedo] = useState(false);
   const [preset, setPreset] = useState<ArtboardPreset>(ARTBOARD_PRESETS[0]);
@@ -285,7 +442,7 @@ export function useEditor() {
   /* ---------- helpers that read the live canvas ---------- */
 
   const sceneObjects = useCallback((c: Canvas) => {
-    return c.getObjects().filter((o) => meta(o).id !== ARTBOARD_ID);
+    return c.getObjects().filter((o) => !INTERNAL_IDS.has(meta(o).id ?? ""));
   }, []);
 
   const refreshLayers = useCallback(() => {
@@ -475,6 +632,7 @@ export function useEditor() {
   );
 
   const undo = useCallback(async () => {
+    cancelCropRef.current();
     // A load is already in flight — dropping the call avoids concurrent
     // loadFromJSON races that corrupt the stack.
     if (restoringRef.current) return;
@@ -486,6 +644,7 @@ export function useEditor() {
   }, [loadState, syncHistoryFlags]);
 
   const redo = useCallback(async () => {
+    cancelCropRef.current();
     if (restoringRef.current) return;
     const next = redoStackRef.current.pop();
     if (!next) return;
@@ -554,6 +713,7 @@ export function useEditor() {
 
   const setTool = useCallback(
     (t: Tool) => {
+      cancelCropRef.current();
       toolRef.current = t;
       setToolState(t);
       const c = canvasRef.current;
@@ -705,6 +865,7 @@ export function useEditor() {
       if (!c || !ab) return;
       ab.set({ fill: color ?? ARTBOARD_PLACEHOLDER_FILL });
       meta(ab).bgTransparent = color === null;
+      delete meta(ab).gradient;
       c.requestRenderAll();
       // Color-picker drags fire rapidly; the toggle is a single action
       if (color === null) saveState();
@@ -1029,6 +1190,7 @@ export function useEditor() {
    * takes the single snapshot. Canvas input is blocked in the UI while a
    * turn is running, so user edits can't fall into the suppressed window. */
   const beginAgentTurn = useCallback(() => {
+    cancelCropRef.current();
     if (historyTimerRef.current) {
       clearTimeout(historyTimerRef.current);
       historyTimerRef.current = null;
@@ -1101,7 +1263,10 @@ export function useEditor() {
             fontFamily: String(o.fontFamily ?? "Arial"),
             fontSize: Number(o.fontSize ?? 64),
             textAlign: (o.textAlign as "left" | "center" | "right") ?? "left",
-            fill: typeof o.fill === "string" ? o.fill : "#ffffff",
+            fill:
+              typeof o.fill === "string"
+                ? o.fill
+                : (meta(o).gradient ?? "#ffffff"),
             stroke: typeof o.stroke === "string" ? o.stroke : "",
             strokeWidth: Number(o.strokeWidth ?? 0),
           };
@@ -1120,7 +1285,8 @@ export function useEditor() {
           snap.image = readAdjustments(o);
         } else if (!(o instanceof Group)) {
           snap.shape = {
-            fill: typeof o.fill === "string" ? o.fill : "",
+            fill:
+              typeof o.fill === "string" ? o.fill : (meta(o).gradient ?? ""),
             stroke: typeof o.stroke === "string" ? o.stroke : "",
             strokeWidth: Number(o.strokeWidth ?? 0),
           };
@@ -1134,49 +1300,104 @@ export function useEditor() {
         width: ab.width!,
         height: ab.height!,
         background:
-          artboardBgRef.current === null
+          meta(ab).gradient ??
+          (artboardBgRef.current === null
             ? "transparent"
-            : artboardBgRef.current,
+            : artboardBgRef.current),
         direction: meta(ab).direction ?? "ltr",
       },
       layers,
     };
   }, [sceneObjects]);
 
-  const agentScreenshot = useCallback((maxDim = 768): string | null => {
-    const c = canvasRef.current;
-    const ab = artboardRef.current;
-    if (!c || !ab) return null;
-    const vt = [...c.viewportTransform] as [
-      number,
-      number,
-      number,
-      number,
-      number,
-      number,
-    ];
-    const shadow = ab.shadow;
-    const stroke = ab.stroke;
-    ab.shadow = null;
-    ab.stroke = null;
-    c.setViewportTransform([1, 0, 0, 1, 0, 0]);
-    try {
-      return c.toDataURL({
-        format: "png",
-        left: ab.left,
-        top: ab.top,
-        width: ab.width,
-        height: ab.height,
-        multiplier: Math.min(1, maxDim / Math.max(ab.width!, ab.height!)),
-        enableRetinaScaling: false,
-      });
-    } finally {
-      ab.shadow = shadow;
-      ab.stroke = stroke;
-      c.setViewportTransform(vt);
-      c.requestRenderAll();
-    }
-  }, []);
+  /**
+   * Render the artboard — or a zoomed-in slice of it — to a PNG data URL.
+   *
+   * A whole 1024px artboard squeezed into 768px leaves a single object only a
+   * couple hundred pixels to be judged by, which is not enough to pick a crop
+   * edge off. Passing `layerId`/`region` re-renders just that area from the
+   * source pixels, so the same 768px budget buys real detail. The rectangle it
+   * covers is returned alongside: without it the caller cannot map what it sees
+   * back to artboard coordinates.
+   */
+  const agentScreenshot = useCallback(
+    (opts?: {
+      layerId?: string;
+      region?: AbsRect;
+      maxDim?: number;
+    }): { url: string; region: AbsRect } | null => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return null;
+      const maxDim = opts?.maxDim ?? 768;
+
+      const zoomed = Boolean(opts?.layerId || opts?.region);
+      let region: AbsRect = { x: 0, y: 0, width: ab.width!, height: ab.height! };
+      if (opts?.layerId) {
+        const obj = layerById(c, opts.layerId);
+        if (!obj) return null;
+        const br = obj.getBoundingRect();
+        // A little margin so the layer's own edges are visible, not flush-cut
+        const pad = Math.max(8, Math.round(Math.max(br.width, br.height) * 0.04));
+        region = {
+          x: br.left - pad,
+          y: br.top - pad,
+          width: br.width + pad * 2,
+          height: br.height + pad * 2,
+        };
+      } else if (opts?.region) {
+        region = opts.region;
+      }
+      // Clamp into the artboard: outside it there is nothing to render
+      const x = Math.max(0, Math.min(region.x, ab.width! - 1));
+      const y = Math.max(0, Math.min(region.y, ab.height! - 1));
+      region = {
+        x,
+        y,
+        width: Math.max(1, Math.min(region.width, ab.width! - x)),
+        height: Math.max(1, Math.min(region.height, ab.height! - y)),
+      };
+
+      const vt = [...c.viewportTransform] as [
+        number,
+        number,
+        number,
+        number,
+        number,
+        number,
+      ];
+      const shadow = ab.shadow;
+      const stroke = ab.stroke;
+      ab.shadow = null;
+      ab.stroke = null;
+      c.setViewportTransform([1, 0, 0, 1, 0, 0]);
+      try {
+        const url = c.toDataURL({
+          format: "png",
+          left: region.x,
+          top: region.y,
+          width: region.width,
+          height: region.height,
+          // Zooming past 1× is worth it when a region was asked for — fabric
+          // re-rasterizes from the source image, so a downscaled photo gains
+          // back detail. Capped so a tiny region cannot balloon the payload;
+          // the whole-artboard overview never upscales.
+          multiplier: Math.min(
+            zoomed ? 4 : 1,
+            maxDim / Math.max(region.width, region.height),
+          ),
+          enableRetinaScaling: false,
+        });
+        return { url, region };
+      } finally {
+        ab.shadow = shadow;
+        ab.stroke = stroke;
+        c.setViewportTransform(vt);
+        c.requestRenderAll();
+      }
+    },
+    [layerById],
+  );
 
   /** Eyedropper: exact rendered color at an artboard point. Lets the agent
    *  match backgrounds to images (baked-in image backgrounds rarely equal a
@@ -1242,7 +1463,10 @@ export function useEditor() {
       if (patch.visible !== undefined) obj.set({ visible: patch.visible });
       if (patch.flipX !== undefined) obj.set({ flipX: patch.flipX });
       if (patch.flipY !== undefined) obj.set({ flipY: patch.flipY });
-      if (patch.fill !== undefined) obj.set({ fill: patch.fill });
+      if (patch.fill !== undefined) {
+        obj.set({ fill: patch.fill });
+        delete meta(obj).gradient;
+      }
       if (patch.stroke !== undefined) obj.set({ stroke: patch.stroke });
       if (patch.strokeWidth !== undefined)
         obj.set({ strokeWidth: patch.strokeWidth });
@@ -1363,6 +1587,145 @@ export function useEditor() {
       return { ok: true };
     },
     [layerById, refreshLayers],
+  );
+
+  const agentRemoveBackground = useCallback(
+    async (
+      id: string,
+      opts?: { tolerance?: number; mode?: "auto" | "flood" | "ai" },
+    ): Promise<{
+      ok: boolean;
+      method?: "flood" | "ai";
+      removed?: number;
+      borderCleared?: number;
+      note?: string;
+      error?: string;
+    }> => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(obj instanceof FabricImage))
+        return { ok: false, error: `Layer "${id}" is not an image` };
+      const mode = opts?.mode ?? "auto";
+      const src = obj.getSrc();
+      const el = await util.loadImage(src);
+      const w = el.naturalWidth || el.width;
+      const h = el.naturalHeight || el.height;
+      if (!w || !h) return { ok: false, error: "Image has no pixel data" };
+      const off = document.createElement("canvas");
+      off.width = w;
+      off.height = h;
+      const ctx = off.getContext("2d", { willReadFrequently: true });
+      if (!ctx) return { ok: false, error: "Could not read image pixels" };
+      ctx.drawImage(el, 0, 0, w, h);
+      const pixels = ctx.getImageData(0, 0, w, h);
+
+      // A finished cutout re-run is a silent no-op that burns agent rounds —
+      // tell the model to stop instead of pretending to work. Skipped for an
+      // explicit mode:"ai" request: a transparent border does NOT mean the
+      // interior is clean (a logo can sit on a baked circle inside a
+      // transparent frame), so a deliberate AI pass must always run.
+      if (mode !== "ai" && borderAlphaClearedFraction(pixels) > 0.85) {
+        return {
+          ok: true,
+          note: "This image's background is already transparent (it is already a cutout). No pixels were changed — do not call remove_background on it again.",
+        };
+      }
+
+      let stats: { removed: number; borderCleared: number } | undefined;
+      let floodResult: string | undefined;
+      if (mode !== "ai") {
+        stats = removeBackgroundPixels(pixels, opts?.tolerance);
+        ctx.putImageData(pixels, 0, 0);
+        floodResult = off.toDataURL("image/png");
+      }
+
+      let method: "flood" | "ai" = "flood";
+      let nextSrc = floodResult;
+      const wantAI =
+        mode === "ai" || (mode === "auto" && (stats?.borderCleared ?? 0) < 0.85);
+      if (wantAI) {
+        try {
+          // Always segment the ORIGINAL pixels, not the flood-eaten ones.
+          const blob = await removeBackgroundAI(src);
+          nextSrc = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+          method = "ai";
+        } catch (e) {
+          if (!nextSrc)
+            return {
+              ok: false,
+              error: `AI background removal failed: ${e instanceof Error ? e.message : String(e)}`,
+            };
+          // auto mode: keep the flood-fill result as the fallback
+        }
+      }
+      if (!nextSrc) return { ok: false, error: "Background removal produced no image" };
+
+      await obj.setSrc(nextSrc);
+      obj.applyFilters();
+      obj.set("dirty", true);
+      thumbCacheRef.current.delete(id);
+      c.requestRenderAll();
+      refreshLayers();
+      return {
+        ok: true,
+        method,
+        removed: stats?.removed,
+        borderCleared: stats?.borderCleared,
+      };
+    },
+    [layerById, refreshLayers],
+  );
+
+  /* Manual background removal for the selected image, driven from the
+   * Properties panel. Reuses the agent implementation but, unlike the agent
+   * path, takes its own undo snapshot and reports through toasts.
+   *   "auto" — Tier 1 flood fill, escalating to Tier 2 AI when a flat fill
+   *            isn't enough. Fast for solid-color backdrops; skips work on an
+   *            image that is already a cutout.
+   *   "ai"   — force Tier 2 AI subject detection, ignoring the cutout guard.
+   *            For images where auto did too little (e.g. a logo baked onto a
+   *            painted shape inside an otherwise-transparent frame). */
+  const removeSelectedBackground = useCallback(
+    async (mode: "auto" | "ai" = "auto") => {
+      const c = canvasRef.current;
+      if (!c) return;
+      const obj = c.getActiveObject();
+      if (!(obj instanceof FabricImage)) {
+        toast.error("Select a single image to remove its background");
+        return;
+      }
+      const id = meta(obj).id;
+      if (!id) return;
+      setBgRemoving(true);
+      const toastId = toast.loading(
+        mode === "ai" ? "Detecting subject…" : "Removing background…",
+      );
+      try {
+        const res = await agentRemoveBackground(id, { mode });
+        if (!res.ok) {
+          toast.error(res.error ?? "Background removal failed", { id: toastId });
+          return;
+        }
+        if (res.note) {
+          // Already a cutout — nothing changed, so no undo step is recorded.
+          // (Only reachable in auto mode; the AI path skips this guard.)
+          toast.info("This image is already a cutout.", { id: toastId });
+          return;
+        }
+        saveState();
+        toast.success("Background removed", { id: toastId });
+      } finally {
+        setBgRemoving(false);
+      }
+    },
+    [agentRemoveBackground, saveState],
   );
 
   const agentAddText = useCallback(
@@ -1653,6 +2016,260 @@ export function useEditor() {
     [layerById, refreshLayers],
   );
 
+  const agentCropImage = useCallback(
+    (
+      id: string,
+      /** Edge fractions, or `keep`: the artboard-space rectangle to retain. */
+      spec: CropTrim & { keep?: AbsRect },
+    ): { ok: boolean; width?: number; height?: number; error?: string } => {
+      const c = canvasRef.current;
+      if (!c) return { ok: false, error: "Editor not ready" };
+      const obj = layerById(c, id);
+      if (!obj) return { ok: false, error: `No layer with id "${id}"` };
+      if (!(obj instanceof FabricImage))
+        return { ok: false, error: `Layer "${id}" is not an image` };
+
+      let trim: CropTrim = spec;
+      // Source region the trim will be measured against. Fractions measure the
+      // region visible now (they stack); `keep` measures the whole image, so it
+      // REPLACES any earlier crop.
+      let base = {
+        cropX: obj.cropX ?? 0,
+        cropY: obj.cropY ?? 0,
+        width: obj.width!,
+        height: obj.height!,
+      };
+      let restoreFull: (() => void) | null = null;
+
+      if (spec.keep) {
+        const k = spec.keep;
+        if (![k.x, k.y, k.width, k.height].every(Number.isFinite))
+          return { ok: false, error: "keep needs numeric x, y, width, height" };
+        // The layer's box only equals its bounding rect while unrotated, and a
+        // rotated crop rectangle is not expressible as edge trims anyway.
+        const a = ((((obj.angle ?? 0) % 360) + 360) % 360);
+        if (Math.min(a, 360 - a) > 0.01)
+          return {
+            ok: false,
+            error:
+              "keep only works on an unrotated layer — set angle to 0 first, or crop with edge fractions",
+          };
+        const el = obj.getElement() as HTMLImageElement & HTMLCanvasElement;
+        const natW = el.naturalWidth || el.width;
+        const natH = el.naturalHeight || el.height;
+        if (!natW || !natH)
+          return { ok: false, error: "Image source not ready" };
+        const sx = obj.scaleX ?? 1;
+        const sy = obj.scaleY ?? 1;
+        const br = obj.getBoundingRect();
+        // Where the WHOLE image sits, at the current scale, with the part that
+        // is visible now left exactly where it is. Measuring `keep` against
+        // this — not against the cropped box — is what lets a second call widen
+        // a cut that was taken too tight, instead of only ever shaving more off.
+        const full: AbsRect = {
+          x: br.left - base.cropX * sx,
+          y: br.top - base.cropY * sy,
+          width: natW * sx,
+          height: natH * sy,
+        };
+        const next = rectToTrim(full, k);
+        if (!next)
+          return {
+            ok: false,
+            error: `keep rectangle does not overlap the image (it spans x ${Math.round(full.x)}–${Math.round(full.x + full.width)}, y ${Math.round(full.y)}–${Math.round(full.y + full.height)})`,
+          };
+        trim = next;
+        base = { cropX: 0, cropY: 0, width: natW, height: natH };
+        restoreFull = () => {
+          obj.set({ cropX: 0, cropY: 0, width: natW, height: natH });
+          obj.setPositionByOrigin(
+            new Point(full.x + full.width / 2, full.y + full.height / 2),
+            "center",
+            "center",
+          );
+          obj.setCoords();
+        };
+      }
+
+      const sides = {
+        top: trim.top ?? 0,
+        bottom: trim.bottom ?? 0,
+        left: trim.left ?? 0,
+        right: trim.right ?? 0,
+      };
+      for (const [side, v] of Object.entries(sides)) {
+        if (!Number.isFinite(v) || v < 0 || v >= 1)
+          return {
+            ok: false,
+            error: `${side} must be a fraction between 0 and 1 (got ${v})`,
+          };
+      }
+      if (sides.top + sides.bottom >= 1)
+        return { ok: false, error: "top + bottom must be less than 1" };
+      if (sides.left + sides.right >= 1)
+        return { ok: false, error: "left + right must be less than 1" };
+      const untrimmed =
+        sides.top + sides.bottom + sides.left + sides.right === 0;
+      // A `keep` covering the whole image is not a no-op when the layer is
+      // already cropped — it means "give me the rest of the photo back".
+      if (untrimmed && !restoreFull)
+        return { ok: false, error: "Nothing to crop — give at least one side" };
+      // Guard against a sliver too thin to see or select
+      const next = computeCrop(base, sides);
+      if (next.width < 1 || next.height < 1)
+        return { ok: false, error: "That would crop the image away entirely" };
+
+      // Only now — past every check — is the image put back to full size, so a
+      // rejected crop never leaves the layer silently widened.
+      restoreFull?.();
+      if (!untrimmed) applyCrop(obj, sides);
+      // The visible region changed, so the cached thumbnail is stale
+      thumbCacheRef.current.delete(id);
+      c.requestRenderAll();
+      refreshLayers();
+      const br = obj.getBoundingRect();
+      return {
+        ok: true,
+        width: Math.round(br.width),
+        height: Math.round(br.height),
+      };
+    },
+    [layerById, refreshLayers],
+  );
+
+  /* ---------- interactive crop mode ----------
+   * Manual crop for the selected image: clicking Crop overlays a drag-handle
+   * frame on the image; everything outside the frame is dimmed (drawn by the
+   * after:render shade) and the rest of the scene is locked until the user
+   * applies (Enter) or cancels (Esc). Apply converts the frame into edge
+   * fractions and reuses the agent crop op, taking its own undo snapshot —
+   * the same split as removeSelectedBackground. */
+
+  const exitCropMode = useCallback((): CropSession | null => {
+    const c = canvasRef.current;
+    const s = cropSessionRef.current;
+    if (!c || !s) return null;
+    cropSessionRef.current = null;
+    c.off("selection:cleared", s.onDeselect);
+    s.rect.off("moving", s.onMoving);
+    s.rect.off("scaling", s.onScaling);
+    c.remove(s.rect);
+    for (const { obj, selectable, evented } of s.restore)
+      obj.set({ selectable, evented });
+    c.selection = s.prevSelection;
+    c.uniformScaling = s.prevUniform;
+    c.setActiveObject(s.img);
+    setCropping(false);
+    c.requestRenderAll();
+    refreshSelection();
+    return s;
+  }, [refreshSelection]);
+
+  const cancelCropMode = useCallback(() => {
+    void exitCropMode();
+  }, [exitCropMode]);
+
+  const startCropMode = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c || cropSessionRef.current) return;
+    const img = c.getActiveObject();
+    if (!(img instanceof FabricImage) || !meta(img).id) {
+      toast.error("Select a single image to crop it");
+      return;
+    }
+    // Crop mode is modal: lock the whole scene so only the frame reacts
+    const restore = sceneObjects(c).map((obj) => ({
+      obj,
+      selectable: obj.selectable,
+      evented: obj.evented,
+    }));
+    for (const { obj } of restore) obj.set({ selectable: false, evented: false });
+    const prevSelection = c.selection;
+    const prevUniform = c.uniformScaling;
+    c.selection = false;
+    c.uniformScaling = false; // corner handles resize each axis freely
+    c.discardActiveObject();
+
+    const rect = new Rect({
+      width: img.width! * (img.scaleX ?? 1),
+      height: img.height! * (img.scaleY ?? 1),
+      angle: img.angle ?? 0,
+      fill: "transparent",
+      stroke: "rgba(255,255,255,0.85)",
+      strokeWidth: 1,
+      strokeUniform: true,
+      strokeDashArray: [5, 4],
+      lockRotation: true,
+      lockScalingFlip: true,
+      excludeFromExport: true,
+      objectCaching: false,
+    });
+    meta(rect).id = CROP_RECT_ID;
+    rect.setControlsVisibility({ mtr: false });
+    rect.setPositionByOrigin(img.getCenterPoint(), "center", "center");
+    rect.setCoords();
+    c.add(rect);
+    c.setActiveObject(rect);
+
+    const onMoving = () => clampCropRect(img, rect, "move");
+    const onScaling = () => clampCropRect(img, rect, "scale");
+    // Clicking empty space clears the selection; the frame must stay active
+    const onDeselect = () => {
+      if (cropSessionRef.current) c.setActiveObject(rect);
+    };
+    rect.on("moving", onMoving);
+    rect.on("scaling", onScaling);
+    c.on("selection:cleared", onDeselect);
+
+    cropSessionRef.current = {
+      img,
+      rect,
+      restore,
+      prevSelection,
+      prevUniform,
+      onMoving,
+      onScaling,
+      onDeselect,
+    };
+    setCropping(true);
+    c.requestRenderAll();
+  }, [sceneObjects]);
+
+  const applyCropMode = useCallback(() => {
+    const s = cropSessionRef.current;
+    if (!s) return;
+    const b = cropDisplayBox(s.img, s.rect);
+    const frac = (v: number) => Math.min(0.99, Math.max(0, v));
+    const trim: CropTrim = {
+      left: frac((b.cx - b.w / 2 + b.W / 2) / b.W),
+      right: frac((b.W / 2 - b.cx - b.w / 2) / b.W),
+      top: frac((b.cy - b.h / 2 + b.H / 2) / b.H),
+      bottom: frac((b.H / 2 - b.cy - b.h / 2) / b.H),
+    };
+    exitCropMode();
+    // Sub-0.1% trims are pointer noise, not an intent to crop
+    const eps = 0.001;
+    if (
+      trim.left! < eps &&
+      trim.right! < eps &&
+      trim.top! < eps &&
+      trim.bottom! < eps
+    )
+      return;
+    const res = agentCropImage(meta(s.img).id!, trim);
+    if (!res.ok) {
+      toast.error(res.error ?? "Crop failed");
+      return;
+    }
+    saveState();
+    toast.success("Cropped");
+  }, [exitCropMode, agentCropImage, saveState]);
+
+  useEffect(() => {
+    cancelCropRef.current = cancelCropMode;
+    applyCropRef.current = applyCropMode;
+  }, [cancelCropMode, applyCropMode]);
+
   // Wrap an image in a uniform card: a rounded background rect + the image
   // cover-fit into the padded interior, grouped into one tile so the agent can
   // align/distribute cards as boxes instead of raw mismatched images.
@@ -1860,7 +2477,68 @@ export function useEditor() {
     [applyCustomSize, setArtboardBg, saveState, refreshLayers],
   );
 
+  const agentSetGradient = useCallback(
+    (opts: {
+      id?: string;
+      type: "linear" | "radial";
+      from: string;
+      to: string;
+      via?: string;
+      angle?: number;
+    }): { ok: boolean; error?: string; label?: string } => {
+      const c = canvasRef.current;
+      const ab = artboardRef.current;
+      if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      let target: FabricObject = ab;
+      if (opts.id !== undefined) {
+        const obj = layerById(c, opts.id);
+        if (!obj) return { ok: false, error: `No layer with id "${opts.id}"` };
+        if (obj instanceof FabricImage)
+          return {
+            ok: false,
+            error:
+              "Images have no fill — add a gradient shape behind or in front of the image instead",
+          };
+        if (obj instanceof Group)
+          return {
+            ok: false,
+            error:
+              "Groups have no fill — apply the gradient to a layer inside the group",
+          };
+        target = obj;
+      }
+      const angle = opts.angle ?? 90;
+      target.set({
+        fill: new Gradient({
+          type: opts.type,
+          gradientUnits: "percentage",
+          coords: computeGradientCoords(opts.type, angle),
+          colorStops: [
+            { offset: 0, color: opts.from },
+            ...(opts.via ? [{ offset: 0.5, color: opts.via }] : []),
+            { offset: 1, color: opts.to },
+          ],
+        }),
+      });
+      const label = `${opts.type}${opts.type === "linear" ? ` ${angle}°` : ""} ${opts.from}${opts.via ? ` → ${opts.via}` : ""} → ${opts.to}`;
+      meta(target).gradient = label;
+      if (target === ab) {
+        // The swatch UI can only show a solid color — show the start color;
+        // the artboard's real fill is the Gradient object.
+        meta(ab).bgTransparent = false;
+        setArtboardBgState(opts.from);
+        artboardBgRef.current = opts.from;
+      }
+      c.requestRenderAll();
+      saveState();
+      refreshLayers();
+      return { ok: true, label };
+    },
+    [layerById, saveState, refreshLayers],
+  );
+
   const exportPNG = useCallback(() => {
+    cancelCropRef.current();
     const c = canvasRef.current;
     const ab = artboardRef.current;
     if (!c || !ab) return;
@@ -1926,6 +2604,12 @@ export function useEditor() {
     });
     canvasRef.current = canvas;
 
+    // Warm the web fonts so text added later measures with the real font;
+    // re-render in case anything was drawn with a fallback in the meantime.
+    void loadEditorFonts().then(() => {
+      if (canvasRef.current === canvas) canvas.requestRenderAll();
+    });
+
     const p = presetRef.current;
     const artboard = new Rect({
       left: 0,
@@ -1936,14 +2620,14 @@ export function useEditor() {
       width: p.width,
       height: p.height,
       fill: artboardBgRef.current ?? ARTBOARD_PLACEHOLDER_FILL,
-      stroke: "rgba(99, 102, 241, 0.5)",
+      stroke: "rgba(255, 255, 255, 0.14)",
       strokeWidth: 1,
       strokeUniform: true,
       selectable: false,
       evented: false,
       shadow: new Shadow({
-        color: "rgba(99, 102, 241, 0.35)",
-        blur: 80,
+        color: "rgba(99, 102, 241, 0.16)",
+        blur: 64,
         offsetX: 0,
         offsetY: 0,
       }),
@@ -1963,6 +2647,8 @@ export function useEditor() {
       const obj = e.target;
       const ab = artboardRef.current;
       if (!obj || !ab) return;
+      // The crop frame clamps to its image, not to the artboard center
+      if (meta(obj).id === CROP_RECT_ID) return;
       const tol = 5 / canvas.getZoom();
       const abCx = ab.left! + ab.width! / 2;
       const abCy = ab.top! + ab.height! / 2;
@@ -2174,7 +2860,7 @@ export function useEditor() {
     };
     canvas.on("object:added", (e) => {
       const t = e.target;
-      if (meta(t).id === ARTBOARD_ID) return;
+      if (INTERNAL_IDS.has(meta(t).id ?? "")) return;
       // Objects created inside fabric (e.g. brush strokes) arrive without
       // metadata; assign it before the state snapshot is taken.
       if (!meta(t).id) meta(t).id = uid();
@@ -2184,12 +2870,41 @@ export function useEditor() {
       onMutate();
     });
     canvas.on("object:removed", (e) => {
-      if (meta(e.target).id === ARTBOARD_ID) return;
+      if (INTERNAL_IDS.has(meta(e.target).id ?? "")) return;
       onMutate();
     });
-    canvas.on("object:modified", onMutate);
+    canvas.on("object:modified", (e) => {
+      // Dragging the crop frame is not a document edit
+      if (e.target && INTERNAL_IDS.has(meta(e.target).id ?? "")) return;
+      onMutate();
+    });
     canvas.on("text:editing:exited", onMutate);
     canvas.on("text:changed", refreshLayers);
+
+    /* --- crop-mode shade: dim everything outside the crop frame --- */
+    canvas.on("after:render", ({ ctx }) => {
+      const s = cropSessionRef.current;
+      if (!s || !ctx) return;
+      const vt = canvas.viewportTransform;
+      const vb = canvas.calcViewportBoundaries();
+      const corners = s.rect.getCoords();
+      ctx.save();
+      ctx.transform(vt[0], vt[1], vt[2], vt[3], vt[4], vt[5]);
+      ctx.beginPath();
+      ctx.moveTo(vb.tl.x, vb.tl.y);
+      ctx.lineTo(vb.tr.x, vb.tr.y);
+      ctx.lineTo(vb.br.x, vb.br.y);
+      ctx.lineTo(vb.bl.x, vb.bl.y);
+      ctx.closePath();
+      ctx.moveTo(corners[0].x, corners[0].y);
+      ctx.lineTo(corners[1].x, corners[1].y);
+      ctx.lineTo(corners[2].x, corners[2].y);
+      ctx.lineTo(corners[3].x, corners[3].y);
+      ctx.closePath();
+      ctx.fillStyle = "rgba(5, 5, 12, 0.55)";
+      ctx.fill("evenodd");
+      ctx.restore();
+    });
 
     const onSelection = () => {
       refreshLayers();
@@ -2229,6 +2944,19 @@ export function useEditor() {
       if (isTypingTarget(e.target)) return;
       const active = canvas.getActiveObject();
       if (active instanceof IText && active.isEditing) return;
+
+      // Crop mode is modal: Enter applies, Escape cancels, everything else
+      // (delete, tool keys, undo…) is swallowed until the mode ends.
+      if (cropSessionRef.current) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          cancelCropRef.current();
+        } else if (e.key === "Enter" && !isFormControl(e.target)) {
+          e.preventDefault();
+          applyCropRef.current();
+        }
+        return;
+      }
 
       const mod = e.ctrlKey || e.metaKey;
       // Arrows/space/enter belong to the focused control (slider steps,
@@ -2404,6 +3132,8 @@ export function useEditor() {
     duplicateSelected,
     nudgeSelected,
     updateImageAdjustments,
+    removeSelectedBackground,
+    bgRemoving,
     selectLayer,
     toggleLayerVisibility,
     deleteLayer,
@@ -2420,6 +3150,7 @@ export function useEditor() {
     agentSampleColor,
     agentApplyToLayer,
     agentAdjustImage,
+    agentRemoveBackground,
     agentAddText,
     agentAddShape,
     agentDuplicateLayer,
@@ -2428,11 +3159,17 @@ export function useEditor() {
     agentDistributeLayers,
     agentArrangeGrid,
     agentSetImageFit,
+    agentCropImage,
+    cropping,
+    startCropMode,
+    applyCropMode,
+    cancelCropMode,
     agentPlaceInCard,
     agentMoveLayer,
     agentGroupLayers,
     agentUngroupLayer,
     agentSetArtboard,
+    agentSetGradient,
   };
 }
 

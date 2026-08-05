@@ -47,7 +47,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
           type="button"
           onClick={() => setOpen(true)}
           title="AI assistant"
-          className="absolute bottom-4 left-20 z-40 flex items-center gap-2 rounded-xl border border-slate-800/60 bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
+          className="absolute bottom-4 left-20 z-40 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
         >
           <Sparkles className="size-4" />
           Assistant
@@ -55,8 +55,8 @@ export function AgentPanel({ editor }: AgentPanelProps) {
       )}
 
       {open && (
-        <section className="absolute bottom-4 left-20 z-40 flex max-h-[70dvh] w-96 flex-col rounded-2xl border border-slate-800/60 bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-xl">
-          <header className="flex items-center gap-2 border-b border-slate-800/50 px-4 py-3">
+        <section className="absolute bottom-4 left-20 z-40 flex max-h-[70dvh] w-96 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-xl">
+          <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
             <Sparkles className="size-4 text-indigo-400" />
             <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
               Assistant
@@ -165,7 +165,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
             </div>
           )}
 
-          <footer className="border-t border-slate-800/50 p-3">
+          <footer className="border-t border-white/[0.06] p-3">
             <div className="flex items-end gap-2">
               <textarea
                 value={draft}
@@ -179,7 +179,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
                 placeholder={busy ? "Agent is editing…" : "Ask for an edit…"}
                 disabled={busy}
                 rows={2}
-                className="min-h-0 flex-1 resize-none rounded-xl border border-slate-800/60 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500/60 focus:outline-none disabled:opacity-60"
+                className="min-h-0 flex-1 resize-none rounded-xl border border-white/[0.08] bg-zinc-950/60 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500/60 focus:outline-none disabled:opacity-60"
               />
               {busy ? (
                 <button
