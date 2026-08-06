@@ -96,6 +96,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
               item.role === "user" ? (
                 <div
                   key={i}
+                  dir="auto"
                   className="ml-8 self-end rounded-xl rounded-br-sm bg-indigo-500/20 px-3 py-2 text-xs leading-relaxed text-indigo-100"
                 >
                   {item.text}
@@ -103,7 +104,10 @@ export function AgentPanel({ editor }: AgentPanelProps) {
               ) : (
                 <div key={i} className="mr-4 flex flex-col gap-1.5">
                   {item.text && (
-                    <div className="whitespace-pre-wrap rounded-xl rounded-bl-sm bg-zinc-800/70 px-3 py-2 text-xs leading-relaxed text-zinc-200">
+                    <div
+                      dir="auto"
+                      className="whitespace-pre-wrap rounded-xl rounded-bl-sm bg-zinc-800/70 px-3 py-2 text-xs leading-relaxed text-zinc-200"
+                    >
                       {item.text}
                     </div>
                   )}
@@ -112,6 +116,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
                       {item.actions.map((a, j) => (
                         <li
                           key={j}
+                          dir="auto"
                           className="text-[10px] text-zinc-500 before:mr-1.5 before:text-indigo-400 before:content-['✓']"
                         >
                           {a}
@@ -120,7 +125,10 @@ export function AgentPanel({ editor }: AgentPanelProps) {
                     </ul>
                   )}
                   {item.error && (
-                    <p className="rounded-lg bg-red-500/10 px-3 py-1.5 text-[11px] leading-relaxed text-red-300">
+                    <p
+                      dir="auto"
+                      className="rounded-lg bg-red-500/10 px-3 py-1.5 text-[11px] leading-relaxed text-red-300"
+                    >
                       {item.error}
                     </p>
                   )}
@@ -168,6 +176,7 @@ export function AgentPanel({ editor }: AgentPanelProps) {
           <footer className="border-t border-white/[0.06] p-3">
             <div className="flex items-end gap-2">
               <textarea
+                dir="auto"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {

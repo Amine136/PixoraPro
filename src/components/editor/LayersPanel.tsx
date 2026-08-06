@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  Copy,
   Eye,
   EyeOff,
   GripVertical,
@@ -19,6 +20,7 @@ interface LayersPanelProps {
   layers: LayerItem[];
   onSelect: (id: string) => void;
   onToggleVisibility: (id: string) => void;
+  onDuplicate?: (id: string) => void;
   onDelete: (id: string) => void;
   onReorder: (from: number, to: number) => void;
 }
@@ -35,6 +37,7 @@ export function LayersPanel({
   layers,
   onSelect,
   onToggleVisibility,
+  onDuplicate,
   onDelete,
   onReorder,
 }: LayersPanelProps) {
@@ -127,6 +130,7 @@ export function LayersPanel({
                 })()
               )}
               <span
+                dir="auto"
                 className={`min-w-0 flex-1 truncate text-xs ${
                   layer.visible ? "text-zinc-200" : "text-zinc-600 line-through"
                 }`}
@@ -151,6 +155,18 @@ export function LayersPanel({
                 ) : (
                   <EyeOff className="size-3.5" />
                 )}
+              </button>
+              <button
+                type="button"
+                title="Duplicate layer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect(layer.id);
+                  onDuplicate?.(layer.id);
+                }}
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-colors hover:bg-indigo-500/20 hover:text-indigo-300 group-hover:opacity-100"
+              >
+                <Copy className="size-3.5" />
               </button>
               <button
                 type="button"

@@ -108,12 +108,14 @@ export default function Editor() {
           bgRemoving={editor.bgRemoving}
           onGroup={editor.groupSelected}
           onUngroup={editor.ungroupSelected}
+          onDuplicate={editor.duplicateSelected}
           onDelete={editor.deleteSelected}
         />
         <LayersPanel
           layers={editor.layers}
           onSelect={editor.selectLayer}
           onToggleVisibility={editor.toggleLayerVisibility}
+          onDuplicate={editor.duplicateSelected}
           onDelete={editor.deleteLayer}
           onReorder={editor.reorderLayer}
         />

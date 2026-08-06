@@ -104,6 +104,29 @@ const uid = () =>
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2);
 
+const HAS_ARABIC_REGEX =
+  /[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+
+function updateTextDirection(textObj: IText, artboardDir?: string) {
+  const isArabic = HAS_ARABIC_REGEX.test(textObj.text || "");
+  const targetDir = isArabic || artboardDir === "rtl" ? "rtl" : "ltr";
+  let changed = false;
+
+  if (textObj.direction !== targetDir) {
+    textObj.set({ direction: targetDir });
+    changed = true;
+  }
+
+  if (isArabic && textObj.textAlign === "left") {
+    textObj.set({ textAlign: "right" });
+    changed = true;
+  }
+
+  if (changed) {
+    textObj.initDimensions();
+  }
+}
+
 /** Fit an image into a box using native crop/scale (see computeFit). Reads the
  *  source element's natural size so repeated fits compose instead of shrinking.
  *  Keeps the image centered where it was. */
@@ -499,32 +522,51 @@ export function useEditor() {
     const kinds = new Set(objs.map(kindOf));
     const kind = kinds.size === 1 ? [...kinds][0] : ("mixed" as const);
     const first = objs[0];
+    const hasText = objs.some((o) => o instanceof IText);
+    const hasImage = objs.some((o) => o instanceof FabricImage);
+    const hasShape = objs.some(
+      (o) =>
+        !(o instanceof FabricImage) &&
+        !(o instanceof IText) &&
+        !(o instanceof Group),
+    );
+
+    const firstText = objs.find((o) => o instanceof IText) as IText | undefined;
+    const firstShape = objs.find(
+      (o) =>
+        !(o instanceof FabricImage) &&
+        !(o instanceof IText) &&
+        !(o instanceof Group),
+    ) as FabricObject | undefined;
+    const firstImage = objs.find((o) => o instanceof FabricImage) as FabricImage | undefined;
+
     let text: SelectionInfo["text"] = null;
-    if (objs.length === 1 && first instanceof IText) {
+    if (firstText) {
       text = {
-        fontFamily: String(first.fontFamily ?? "Arial"),
-        fontSize: Number(first.fontSize ?? 64),
-        textAlign: (first.textAlign as "left" | "center" | "right") ?? "left",
-        fill: typeof first.fill === "string" ? first.fill : "#ffffff",
-        stroke: typeof first.stroke === "string" ? first.stroke : "#000000",
-        strokeWidth: Number(first.strokeWidth ?? 0),
+        content: objs.length === 1 ? String(firstText.text ?? "") : "",
+        fontFamily: String(firstText.fontFamily ?? "Arial"),
+        fontSize: Number(firstText.fontSize ?? 64),
+        textAlign: (firstText.textAlign as "left" | "center" | "right") ?? "left",
+        fill: typeof firstText.fill === "string" ? firstText.fill : "#ffffff",
+        stroke: typeof firstText.stroke === "string" ? firstText.stroke : "#000000",
+        strokeWidth: Number(firstText.strokeWidth ?? 0),
       };
     }
-    const image =
-      objs.length === 1 && first instanceof FabricImage
-        ? readAdjustments(first)
-        : null;
-    const shape =
-      objs.length === 1 &&
-      !(first instanceof FabricImage) &&
-      !(first instanceof IText) &&
-      !(first instanceof Group)
-        ? {
-            fill: typeof first.fill === "string" ? first.fill : "",
-            stroke: typeof first.stroke === "string" ? first.stroke : "",
-            strokeWidth: Number(first.strokeWidth ?? 0),
-          }
-        : null;
+
+    let shape: SelectionInfo["shape"] = null;
+    if (firstShape) {
+      shape = {
+        fill: typeof firstShape.fill === "string" ? firstShape.fill : "",
+        stroke: typeof firstShape.stroke === "string" ? firstShape.stroke : "",
+        strokeWidth: Number(firstShape.strokeWidth ?? 0),
+      };
+    }
+
+    let image: SelectionInfo["image"] = null;
+    if (firstImage && objs.length === 1) {
+      image = readAdjustments(firstImage);
+    }
+
     setSelection({
       count: objs.length,
       kind,
@@ -533,6 +575,9 @@ export function useEditor() {
       image,
       shape,
       isGroup: objs.length === 1 && first instanceof Group,
+      hasText,
+      hasShape,
+      hasImage,
     });
   }, []);
 
@@ -741,7 +786,9 @@ export function useEditor() {
   const addTextAt = useCallback((p: { x: number; y: number }) => {
     const c = canvasRef.current;
     if (!c) return;
-    const text = new IText("Your text", {
+    const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+    const textStr = "Your text";
+    const text = new IText(textStr, {
       left: p.x,
       top: p.y,
       originX: "center",
@@ -752,6 +799,7 @@ export function useEditor() {
       stroke: "#000000",
       strokeWidth: 0,
       paintFirst: "stroke",
+      direction: HAS_ARABIC_REGEX.test(textStr) || abDir === "rtl" ? "rtl" : "ltr",
     });
     const m = meta(text);
     m.id = uid();
@@ -983,6 +1031,91 @@ export function useEditor() {
     refreshSelection();
     toast.success(
       clones.length === 1 ? "Duplicated" : `Duplicated ${clones.length} objects`,
+    );
+  }, [saveState, refreshLayers, refreshSelection]);
+
+  const clipboardRef = useRef<FabricObject[]>([]);
+
+  const copySelected = useCallback(async () => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const objs = c.getActiveObjects();
+    if (objs.length === 0) return;
+    c.discardActiveObject();
+    const clones = await Promise.all(objs.map((o) => o.clone(EXTRA_PROPS)));
+    clipboardRef.current = clones;
+    if (objs.length === 1) {
+      c.setActiveObject(objs[0]);
+    } else {
+      c.setActiveObject(new ActiveSelection(objs, { canvas: c }));
+    }
+    c.requestRenderAll();
+    toast.success(
+      objs.length === 1 ? "Copied object" : `Copied ${objs.length} objects`,
+    );
+  }, []);
+
+  const cutSelected = useCallback(async () => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const objs = c.getActiveObjects();
+    if (objs.length === 0) return;
+    await copySelected();
+    deleteSelected();
+  }, [copySelected, deleteSelected]);
+
+  const selectAll = useCallback(() => {
+    const c = canvasRef.current;
+    if (!c) return;
+    const objs = c.getObjects().filter((o) => !INTERNAL_IDS.has(meta(o).id ?? ""));
+    if (objs.length === 0) return;
+    c.discardActiveObject();
+    if (objs.length === 1) {
+      c.setActiveObject(objs[0]);
+    } else {
+      c.setActiveObject(new ActiveSelection(objs, { canvas: c }));
+    }
+    c.requestRenderAll();
+    refreshSelection();
+  }, [refreshSelection]);
+
+  const pasteSelected = useCallback(async () => {
+    const c = canvasRef.current;
+    if (!c || clipboardRef.current.length === 0) return;
+    const items = clipboardRef.current;
+    c.discardActiveObject();
+    const newClones = await Promise.all(items.map((o) => o.clone(EXTRA_PROPS)));
+    restoringRef.current = true;
+    try {
+      newClones.forEach((clone) => {
+        clone.set({
+          left: (clone.left ?? 0) + 20,
+          top: (clone.top ?? 0) + 20,
+        });
+        clone.setCoords();
+        const m = meta(clone);
+        m.id = uid();
+        const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+        if (clone instanceof IText) {
+          updateTextDirection(clone, abDir);
+        }
+        c.add(clone);
+      });
+    } finally {
+      restoringRef.current = false;
+    }
+    if (newClones.length === 1) {
+      c.setActiveObject(newClones[0]);
+    } else {
+      c.setActiveObject(new ActiveSelection(newClones, { canvas: c }));
+    }
+    c.requestRenderAll();
+    saveState();
+    refreshLayers();
+    refreshSelection();
+    clipboardRef.current = newClones;
+    toast.success(
+      newClones.length === 1 ? "Pasted object" : `Pasted ${newClones.length} objects`,
     );
   }, [saveState, refreshLayers, refreshSelection]);
 
@@ -1493,7 +1626,11 @@ export function useEditor() {
       }
 
       if (obj instanceof IText) {
-        if (patch.text !== undefined) obj.set({ text: patch.text });
+        if (patch.text !== undefined) {
+          obj.set({ text: patch.text });
+          const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+          updateTextDirection(obj, abDir);
+        }
         if (patch.fontFamily !== undefined)
           obj.set({ fontFamily: patch.fontFamily });
         if (patch.fontSize !== undefined) obj.set({ fontSize: patch.fontSize });
@@ -1733,6 +1870,8 @@ export function useEditor() {
       const c = canvasRef.current;
       const ab = artboardRef.current;
       if (!c || !ab) return { ok: false, error: "Editor not ready" };
+      const abDir = meta(ab).direction ?? "ltr";
+      const isArabic = HAS_ARABIC_REGEX.test(opts.text || "");
       const text = new IText(opts.text, {
         left: opts.x ?? ab.width! / 2,
         top: opts.y ?? ab.height! / 2,
@@ -1744,6 +1883,7 @@ export function useEditor() {
         stroke: opts.stroke ?? "#000000",
         strokeWidth: opts.strokeWidth ?? 0,
         textAlign: opts.textAlign ?? "left",
+        direction: isArabic || abDir === "rtl" ? "rtl" : "ltr",
         fontWeight: opts.fontWeight ?? "normal",
         fontStyle: opts.fontStyle ?? "normal",
         underline: opts.underline ?? false,
@@ -2593,6 +2733,8 @@ export function useEditor() {
     // Fabric mutates the element it mounts on; create a fresh one per mount so
     // React StrictMode's double-invoke never re-initializes the same node.
     const el = document.createElement("canvas");
+    el.setAttribute("dir", "auto");
+    el.style.unicodeBidi = "plaintext";
     container.appendChild(el);
     const canvas = new Canvas(el, {
       width: container.clientWidth,
@@ -2860,6 +3002,10 @@ export function useEditor() {
     };
     canvas.on("object:added", (e) => {
       const t = e.target;
+      if (t instanceof IText) {
+        const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+        updateTextDirection(t, abDir);
+      }
       if (INTERNAL_IDS.has(meta(t).id ?? "")) return;
       // Objects created inside fabric (e.g. brush strokes) arrive without
       // metadata; assign it before the state snapshot is taken.
@@ -2878,8 +3024,21 @@ export function useEditor() {
       if (e.target && INTERNAL_IDS.has(meta(e.target).id ?? "")) return;
       onMutate();
     });
+    canvas.on("text:editing:entered", (e) => {
+      const t = e.target as unknown as { hiddenTextarea?: HTMLTextAreaElement };
+      if (t && t.hiddenTextarea) {
+        t.hiddenTextarea.setAttribute("dir", "auto");
+        t.hiddenTextarea.style.unicodeBidi = "plaintext";
+      }
+    });
     canvas.on("text:editing:exited", onMutate);
-    canvas.on("text:changed", refreshLayers);
+    canvas.on("text:changed", (e) => {
+      if (e.target instanceof IText) {
+        const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+        updateTextDirection(e.target, abDir);
+      }
+      refreshLayers();
+    });
 
     /* --- crop-mode shade: dim everything outside the crop frame --- */
     canvas.on("after:render", ({ ctx }) => {
@@ -2906,7 +3065,12 @@ export function useEditor() {
       ctx.restore();
     });
 
+    /* --- selection events --- */
     const onSelection = () => {
+      const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
+      canvas.getActiveObjects().forEach((o) => {
+        if (o instanceof IText) updateTextDirection(o, abDir);
+      });
       refreshLayers();
       refreshSelection();
     };
@@ -2959,6 +3123,10 @@ export function useEditor() {
       }
 
       const mod = e.ctrlKey || e.metaKey;
+      const key = e.key.toLowerCase();
+      const code = e.code;
+      const matchKey = (k: string, codeName: string) => key === k || code === codeName;
+
       // Arrows/space/enter belong to the focused control (slider steps,
       // button activation); letter shortcuts can safely pass through
       if (
@@ -2967,23 +3135,45 @@ export function useEditor() {
         isFormControl(e.target)
       )
         return;
-      if (mod && e.key.toLowerCase() === "z") {
+      if (mod && matchKey("z", "KeyZ")) {
         e.preventDefault();
         if (e.shiftKey) void redo();
         else void undo();
         return;
       }
-      if (mod && e.key.toLowerCase() === "y") {
+      if (mod && matchKey("y", "KeyY")) {
         e.preventDefault();
         void redo();
         return;
       }
-      if (mod && e.key.toLowerCase() === "d") {
+      if (mod && matchKey("c", "KeyC")) {
+        e.preventDefault();
+        void copySelected();
+        return;
+      }
+      if (mod && matchKey("x", "KeyX")) {
+        e.preventDefault();
+        void cutSelected();
+        return;
+      }
+      if (mod && matchKey("v", "KeyV")) {
+        if (clipboardRef.current.length > 0) {
+          e.preventDefault();
+          void pasteSelected();
+          return;
+        }
+      }
+      if (mod && matchKey("a", "KeyA")) {
+        e.preventDefault();
+        selectAll();
+        return;
+      }
+      if (mod && matchKey("d", "KeyD")) {
         e.preventDefault();
         void duplicateSelected();
         return;
       }
-      if (mod && e.key.toLowerCase() === "g") {
+      if (mod && matchKey("g", "KeyG")) {
         e.preventDefault();
         if (e.shiftKey) ungroupSelected();
         else groupSelected();
@@ -3033,6 +3223,13 @@ export function useEditor() {
       if (isTypingTarget(e.target)) return;
       const active = canvas.getActiveObject();
       if (active instanceof IText && active.isEditing) return;
+
+      if (clipboardRef.current.length > 0) {
+        e.preventDefault();
+        void pasteSelected();
+        return;
+      }
+
       const files = Array.from(e.clipboardData?.items ?? [])
         .filter((i) => i.type.startsWith("image/"))
         .map((i) => i.getAsFile())
@@ -3130,6 +3327,10 @@ export function useEditor() {
     ungroupSelected,
     deleteSelected,
     duplicateSelected,
+    copySelected,
+    cutSelected,
+    pasteSelected,
+    selectAll,
     nudgeSelected,
     updateImageAdjustments,
     removeSelectedBackground,

@@ -23,6 +23,7 @@ export interface LayerItem {
 }
 
 export interface TextSelectionProps {
+  content: string;
   fontFamily: string;
   fontSize: number;
   textAlign: "left" | "center" | "right";
@@ -57,6 +58,9 @@ export interface SelectionInfo {
   image: ImageAdjustments | null;
   shape: ShapeSelectionProps | null;
   isGroup: boolean;
+  hasText?: boolean;
+  hasShape?: boolean;
+  hasImage?: boolean;
 }
 
 export interface ArtboardPreset {

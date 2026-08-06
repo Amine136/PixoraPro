@@ -136,3 +136,13 @@ input[type="range"].pixora-range::-moz-range-thumb {
   border: 2px solid #09090b;
   cursor: pointer;
 }
+
+/* BiDi / Arabic text support */
+input[type="text"],
+input:not([type]),
+textarea,
+[contenteditable="true"],
+.bidi-auto {
+  unicode-bidi: plaintext;
+}
+
