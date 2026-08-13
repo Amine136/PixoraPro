@@ -2,6 +2,8 @@
 
 <div align="center">
 
+  ![Pixora AI Editor Overview](public/docs/hero-banner.jpg)
+
   **Next-Generation Canvas & Image Editor Powered by Multi-Layer Autonomous AI Agents**
 
   [![Next.js](https://img.shields.io/badge/Next.js-16.2-black?style=for-the-badge&logo=nextdotjs)](https://nextjs.org/)
