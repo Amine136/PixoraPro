@@ -1,4 +1,4 @@
-# Pixora (Vibecraft) - AI Agent-Powered Image & Canvas Editor
+# PixoraPro - AI Agent-Powered Image & Canvas Editor
 
 <div align="center">
 
@@ -117,8 +117,8 @@ Pixora's agent operates via a neutral protocol behind an `AgentTransport` interf
 
 ### 2. Clone & Install
 ```bash
-git clone https://github.com/Amine136/vibecraft_edit_feature.git
-cd vibecraft_edit_feature
+git clone https://github.com/Amine136/PixoraPro.git
+cd PixoraPro
 npm install
 ```
 
@@ -150,7 +150,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 ## 📁 Project Architecture
 
 ```
-vibecraft_edit_feature/
+PixoraPro/
 ├── public/
 │   └── docs/                     # Documentation screenshots & exports
 ├── docs/
