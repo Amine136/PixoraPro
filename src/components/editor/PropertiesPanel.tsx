@@ -6,13 +6,18 @@ import {
   AlignLeft,
   AlignRight,
   Ban,
+  Copy,
+  Crop,
   Eraser,
   Frame,
   Group as GroupIcon,
   Laugh,
+  Loader2,
   Paintbrush,
   RotateCcw,
+  Scissors,
   SlidersHorizontal,
+  Sparkles,
   Trash2,
   Ungroup,
 } from "lucide-react";
@@ -37,8 +42,15 @@ interface PropertiesPanelProps {
   onUpdate: (patch: Record<string, unknown>) => void;
   onAdjust: (patch: Partial<ImageAdjustments>) => void;
   onMemePreset: () => void;
+  onRemoveBackground: (mode?: "auto" | "ai") => void;
+  cropping: boolean;
+  onCropStart: () => void;
+  onCropApply: () => void;
+  onCropCancel: () => void;
+  bgRemoving: boolean;
   onGroup: () => void;
   onUngroup: () => void;
+  onDuplicate: () => void;
   onDelete: () => void;
 }
 
@@ -65,7 +77,7 @@ function Header({
   badge?: string;
 }) {
   return (
-    <header className="flex items-center gap-2 border-b border-slate-800/50 px-4 py-3">
+    <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
       <Icon className="size-4 text-indigo-400" />
       <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
         {title}
@@ -109,13 +121,106 @@ function AdjustmentSlider({
 }
 
 const glass =
-  "rounded-2xl border border-slate-800/60 bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl";
+  "rounded-2xl border border-white/[0.08] bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl";
 
 const BRUSH_TYPES: { id: BrushType; label: string }[] = [
   { id: "pencil", label: "Solid" },
   { id: "circle", label: "Soft" },
   { id: "spray", label: "Spray" },
 ];
+
+const PRESET_COLORS = [
+  "#ffffff", "#f4f4f5", "#a1a1aa", "#3f3f46", "#18181b", "#000000",
+  "#ef4444", "#f97316", "#f59e0b", "#10b981", "#06b6d4", "#3b82f6",
+  "#6366f1", "#8b5cf6", "#d946ef"
+];
+
+function ColorPickerInput({
+  value,
+  onChange,
+  ariaLabel = "Color picker",
+}: {
+  value: string;
+  onChange: (color: string) => void;
+  ariaLabel?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const colorVal = value || "#ffffff";
+
+  return (
+    <div className="relative inline-flex items-center">
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        className="pixora-swatch flex items-center justify-center rounded-lg border border-white/20 p-0.5 shadow-sm transition-transform hover:scale-105"
+        style={{ width: 28, height: 28 }}
+        aria-label={ariaLabel}
+      >
+        <span
+          className="size-full rounded-[6px]"
+          style={{ backgroundColor: colorVal }}
+        />
+      </button>
+
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-full top-0 mr-3 z-50 flex w-56 flex-col gap-2.5 rounded-2xl border border-white/[0.1] bg-zinc-900/95 p-3 shadow-2xl shadow-black/80 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] pb-2">
+              <div className="flex items-center gap-2">
+                <span
+                  className="size-4 shrink-0 rounded-md border border-white/20 shadow-sm"
+                  style={{ backgroundColor: colorVal }}
+                />
+                <input
+                  type="text"
+                  value={colorVal}
+                  onChange={(e) => onChange(e.target.value)}
+                  className="h-6 w-24 rounded bg-zinc-950/80 px-1.5 font-mono text-[11px] text-zinc-200 outline-none focus:border focus:border-indigo-500"
+                />
+              </div>
+              <label
+                title="Custom color picker"
+                className="relative flex size-6 cursor-pointer items-center justify-center rounded-md border border-white/10 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200"
+              >
+                <SlidersHorizontal className="size-3.5" />
+                <input
+                  type="color"
+                  value={colorVal.startsWith("#") && colorVal.length === 7 ? colorVal : "#ffffff"}
+                  onChange={(e) => onChange(e.target.value)}
+                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-5 gap-1.5">
+              {PRESET_COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    onChange(c);
+                    setOpen(false);
+                  }}
+                  className={`size-7 rounded-lg border transition-transform hover:scale-110 ${
+                    colorVal.toLowerCase() === c.toLowerCase()
+                      ? "border-indigo-400 ring-2 ring-indigo-400/40"
+                      : "border-white/10 hover:border-white/40"
+                  }`}
+                  style={{ backgroundColor: c }}
+                  title={c}
+                />
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 export function PropertiesPanel({
   tool,
@@ -129,8 +234,15 @@ export function PropertiesPanel({
   onUpdate,
   onAdjust,
   onMemePreset,
+  onRemoveBackground,
+  cropping,
+  onCropStart,
+  onCropApply,
+  onCropCancel,
+  bgRemoving,
   onGroup,
   onUngroup,
+  onDuplicate,
   onDelete,
 }: PropertiesPanelProps) {
   const { text, image, shape } = selection;
@@ -138,6 +250,43 @@ export function PropertiesPanel({
   useEffect(() => {
     if (!image) setTab("style");
   }, [image]);
+
+  /* --- Interactive crop mode (modal: trumps every other panel) --- */
+  if (cropping) {
+    return (
+      <section className={glass}>
+        <Header icon={Crop} title="Crop" />
+        <div className="flex flex-col gap-3 p-4">
+          <p className="text-[11px] leading-relaxed text-zinc-500">
+            Drag the handles to choose what to keep — the dimmed area gets cut
+            away. Drag inside the frame to move it.
+          </p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={onCropCancel}
+              className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] text-[11px] font-medium text-zinc-400 transition-colors hover:text-zinc-200"
+            >
+              Cancel
+              <kbd className="rounded bg-zinc-800 px-1 font-mono text-[10px] text-zinc-500">
+                Esc
+              </kbd>
+            </button>
+            <button
+              type="button"
+              onClick={onCropApply}
+              className="flex h-8 flex-1 items-center justify-center gap-1.5 rounded-lg bg-indigo-500/80 text-[11px] font-semibold text-white transition-colors hover:bg-indigo-500"
+            >
+              Apply
+              <kbd className="rounded bg-indigo-400/30 px-1 font-mono text-[10px] text-indigo-100">
+                ↵
+              </kbd>
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  }
 
   /* --- Eraser settings (eraser tool active; selection stays live) --- */
   if (tool === "eraser") {
@@ -181,7 +330,7 @@ export function PropertiesPanel({
         <Header icon={Paintbrush} title="Brush" />
         <div className="flex flex-col gap-3 p-4">
           <Row label="Type">
-            <div className="flex w-full overflow-hidden rounded-lg border border-slate-800/60">
+            <div className="flex w-full overflow-hidden rounded-lg border border-white/[0.08]">
               {BRUSH_TYPES.map(({ id, label }) => (
                 <button
                   key={id}
@@ -203,12 +352,10 @@ export function PropertiesPanel({
             <span className="font-mono text-[11px] text-zinc-500">
               {brush.color}
             </span>
-            <input
-              type="color"
+            <ColorPickerInput
               value={brush.color}
-              onChange={(e) => onBrush({ color: e.target.value })}
-              className="pixora-swatch"
-              aria-label="Brush color"
+              onChange={(c) => onBrush({ color: c })}
+              ariaLabel="Brush color"
             />
           </Row>
           <Row label="Size">
@@ -243,12 +390,10 @@ export function PropertiesPanel({
             <span className="font-mono text-[11px] text-zinc-500">
               {artboardBg ?? "transparent"}
             </span>
-            <input
-              type="color"
+            <ColorPickerInput
               value={artboardBg ?? "#ffffff"}
-              onChange={(e) => onArtboardBg(e.target.value)}
-              className="pixora-swatch"
-              aria-label="Background color"
+              onChange={(c) => onArtboardBg(c)}
+              ariaLabel="Background color"
             />
           </Row>
           <button
@@ -258,7 +403,7 @@ export function PropertiesPanel({
             className={`flex h-9 items-center justify-center gap-2 rounded-xl border text-xs font-medium transition-colors ${
               artboardBg === null
                 ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-300"
-                : "border-slate-800/60 bg-zinc-950/40 text-zinc-400 hover:border-slate-700 hover:text-zinc-200"
+                : "border-white/[0.08] bg-zinc-950/40 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
             }`}
           >
             <Ban className="size-3.5" />
@@ -291,7 +436,7 @@ export function PropertiesPanel({
       />
 
       {image && (
-        <div className="flex gap-1 border-b border-slate-800/50 px-3 py-2">
+        <div className="flex gap-1 border-b border-white/[0.06] px-3 py-2">
           {(
             [
               ["style", "Style"],
@@ -342,7 +487,7 @@ export function PropertiesPanel({
               image.contrast === 0 &&
               image.saturation === 0
             }
-            className="mt-1 flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-800/60 bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-slate-700 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
+            className="mt-1 flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-white/20 hover:text-zinc-200 disabled:pointer-events-none disabled:opacity-40"
           >
             <RotateCcw className="size-3.5" />
             Reset adjustments
@@ -367,19 +512,53 @@ export function PropertiesPanel({
             </span>
           </Row>
 
+          {image && selection.count === 1 && (
+            <div className="mt-1 flex flex-col gap-1.5">
+              <button
+                type="button"
+                onClick={() => onRemoveBackground("auto")}
+                disabled={bgRemoving}
+                className="flex h-9 items-center justify-center gap-2 rounded-xl border border-indigo-500/40 bg-indigo-500/10 text-xs font-semibold text-indigo-300 transition-colors hover:bg-indigo-500/20 disabled:pointer-events-none disabled:opacity-60"
+              >
+                {bgRemoving ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <Scissors className="size-4" />
+                )}
+                {bgRemoving ? "Working…" : "Remove background"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onRemoveBackground("ai")}
+                disabled={bgRemoving}
+                title="AI subject detection — removes any background, even complex ones. Slower."
+                className="flex h-8 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-[11px] font-medium text-zinc-400 transition-colors hover:border-indigo-500/40 hover:text-indigo-300 disabled:pointer-events-none disabled:opacity-60"
+              >
+                <Sparkles className="size-3.5" />
+                Cut out subject (AI)
+              </button>
+              <button
+                type="button"
+                onClick={onCropStart}
+                className="flex h-8 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-[11px] font-medium text-zinc-400 transition-colors hover:border-indigo-500/40 hover:text-indigo-300"
+              >
+                <Crop className="size-3.5" />
+                Crop
+              </button>
+            </div>
+          )}
+
           {shape && (
             <>
-              <div className="my-1 h-px bg-slate-800/50" aria-hidden />
+              <div className="my-1 h-px bg-white/[0.06]" aria-hidden />
               <Row label="Fill">
                 <span className="font-mono text-[11px] text-zinc-500">
                   {shape.fill || "none"}
                 </span>
-                <input
-                  type="color"
+                <ColorPickerInput
                   value={shape.fill || "#6366f1"}
-                  onChange={(e) => onUpdate({ fill: e.target.value })}
-                  className="pixora-swatch"
-                  aria-label="Fill color"
+                  onChange={(c) => onUpdate({ fill: c })}
+                  ariaLabel="Fill color"
                 />
               </Row>
               <Row label="Stroke">
@@ -397,12 +576,30 @@ export function PropertiesPanel({
                   className="pixora-range w-full"
                   aria-label="Stroke width"
                 />
-                <input
-                  type="color"
+                <ColorPickerInput
                   value={shape.stroke || "#c7d2fe"}
-                  onChange={(e) => onUpdate({ stroke: e.target.value })}
-                  className="pixora-swatch shrink-0"
-                  aria-label="Stroke color"
+                  onChange={(c) => onUpdate({ stroke: c })}
+                  ariaLabel="Stroke color"
+                />
+              </Row>
+            </>
+          )}
+
+          {!text && !shape && selection.count > 1 && (
+            <>
+              <div className="my-1 h-px bg-white/[0.06]" aria-hidden />
+              <Row label="Batch Fill">
+                <ColorPickerInput
+                  value="#6366f1"
+                  onChange={(c) => onUpdate({ fill: c })}
+                  ariaLabel="Batch fill color"
+                />
+              </Row>
+              <Row label="Batch Stroke">
+                <ColorPickerInput
+                  value="#c7d2fe"
+                  onChange={(c) => onUpdate({ stroke: c })}
+                  ariaLabel="Batch stroke color"
                 />
               </Row>
             </>
@@ -410,13 +607,26 @@ export function PropertiesPanel({
 
           {text && (
             <>
-              <div className="my-1 h-px bg-slate-800/50" aria-hidden />
+              <div className="my-1 h-px bg-white/[0.06]" aria-hidden />
+
+              {selection.count === 1 && (
+                <Row label="Text">
+                  <input
+                    type="text"
+                    dir="auto"
+                    value={text.content ?? ""}
+                    onChange={(e) => onUpdate({ text: e.target.value })}
+                    className="h-8 w-full rounded-lg border border-white/[0.08] bg-zinc-950/60 px-2 text-xs text-zinc-300 outline-none transition-colors hover:border-white/20 focus-visible:border-indigo-500"
+                    aria-label="Text content"
+                  />
+                </Row>
+              )}
 
               <Row label="Font">
                 <select
                   value={text.fontFamily}
                   onChange={(e) => onUpdate({ fontFamily: e.target.value })}
-                  className="h-8 w-full rounded-lg border border-slate-800/60 bg-zinc-950/60 px-2 text-xs text-zinc-300 outline-none transition-colors hover:border-slate-700 focus-visible:border-indigo-500"
+                  className="h-8 w-full rounded-lg border border-white/[0.08] bg-zinc-950/60 px-2 text-xs text-zinc-300 outline-none transition-colors hover:border-white/20 focus-visible:border-indigo-500"
                   aria-label="Font family"
                 >
                   {!FONT_FAMILIES.includes(text.fontFamily) && (
@@ -450,13 +660,13 @@ export function PropertiesPanel({
                   onChange={(e) =>
                     onUpdate({ fontSize: Math.max(1, Number(e.target.value)) })
                   }
-                  className="h-8 w-14 shrink-0 rounded-lg border border-slate-800/60 bg-zinc-950/60 px-2 text-right font-mono text-xs text-zinc-300 outline-none focus-visible:border-indigo-500"
+                  className="h-8 w-14 shrink-0 rounded-lg border border-white/[0.08] bg-zinc-950/60 px-2 text-right font-mono text-xs text-zinc-300 outline-none focus-visible:border-indigo-500"
                   aria-label="Font size value"
                 />
               </Row>
 
               <Row label="Align">
-                <div className="flex overflow-hidden rounded-lg border border-slate-800/60">
+                <div className="flex overflow-hidden rounded-lg border border-white/[0.08]">
                   {(
                     [
                       ["left", AlignLeft],
@@ -486,12 +696,10 @@ export function PropertiesPanel({
                 <span className="font-mono text-[11px] text-zinc-500">
                   {text.fill}
                 </span>
-                <input
-                  type="color"
+                <ColorPickerInput
                   value={text.fill}
-                  onChange={(e) => onUpdate({ fill: e.target.value })}
-                  className="pixora-swatch"
-                  aria-label="Fill color"
+                  onChange={(c) => onUpdate({ fill: c })}
+                  ariaLabel="Fill color"
                 />
               </Row>
 
@@ -510,14 +718,12 @@ export function PropertiesPanel({
                   className="pixora-range w-full"
                   aria-label="Outline width"
                 />
-                <input
-                  type="color"
+                <ColorPickerInput
                   value={text.stroke || "#000000"}
-                  onChange={(e) =>
-                    onUpdate({ stroke: e.target.value, paintFirst: "stroke" })
+                  onChange={(c) =>
+                    onUpdate({ stroke: c, paintFirst: "stroke" })
                   }
-                  className="pixora-swatch shrink-0"
-                  aria-label="Outline color"
+                  ariaLabel="Outline color"
                 />
               </Row>
 
@@ -562,8 +768,21 @@ export function PropertiesPanel({
 
           <button
             type="button"
+            onClick={onDuplicate}
+            className="flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-xs font-medium text-zinc-300 transition-colors hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-200"
+          >
+            <Copy className="size-3.5 text-indigo-400" />
+            Duplicate{" "}
+            {selection.count > 1 ? `${selection.count} objects` : "layer"}
+            <kbd className="rounded bg-zinc-800 px-1 font-mono text-[10px] text-zinc-500">
+              Ctrl+D
+            </kbd>
+          </button>
+
+          <button
+            type="button"
             onClick={onDelete}
-            className="flex h-9 items-center justify-center gap-2 rounded-xl border border-slate-800/60 bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
+            className="flex h-9 items-center justify-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-950/40 text-xs font-medium text-zinc-400 transition-colors hover:border-red-500/40 hover:bg-red-500/10 hover:text-red-400"
           >
             <Trash2 className="size-3.5" />
             Delete{" "}

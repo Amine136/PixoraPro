@@ -9,6 +9,8 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
+    "@imgly/background-removal": "^1.7.0",
     "fabric": "^7.4.0",
     "lucide-react": "^1.23.0",
     "next": "16.2.10",

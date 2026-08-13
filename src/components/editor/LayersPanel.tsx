@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import {
+  Copy,
   Eye,
   EyeOff,
   GripVertical,
@@ -19,6 +20,7 @@ interface LayersPanelProps {
   layers: LayerItem[];
   onSelect: (id: string) => void;
   onToggleVisibility: (id: string) => void;
+  onDuplicate?: (id: string) => void;
   onDelete: (id: string) => void;
   onReorder: (from: number, to: number) => void;
 }
@@ -35,6 +37,7 @@ export function LayersPanel({
   layers,
   onSelect,
   onToggleVisibility,
+  onDuplicate,
   onDelete,
   onReorder,
 }: LayersPanelProps) {
@@ -42,8 +45,8 @@ export function LayersPanel({
   const [overIdx, setOverIdx] = useState<number | null>(null);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-slate-800/60 bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
-      <header className="flex items-center gap-2 border-b border-slate-800/50 px-4 py-3">
+    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
+      <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
         <Layers className="size-4 text-indigo-400" />
         <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
           Layers
@@ -107,7 +110,7 @@ export function LayersPanel({
                   alt=""
                   draggable={false}
                   className={`h-7 w-10 shrink-0 rounded-md object-cover ring-1 ring-inset ${
-                    layer.selected ? "ring-indigo-500/60" : "ring-slate-700/50"
+                    layer.selected ? "ring-indigo-500/60" : "ring-white/10"
                   }`}
                 />
               ) : (
@@ -127,6 +130,7 @@ export function LayersPanel({
                 })()
               )}
               <span
+                dir="auto"
                 className={`min-w-0 flex-1 truncate text-xs ${
                   layer.visible ? "text-zinc-200" : "text-zinc-600 line-through"
                 }`}
@@ -151,6 +155,18 @@ export function LayersPanel({
                 ) : (
                   <EyeOff className="size-3.5" />
                 )}
+              </button>
+              <button
+                type="button"
+                title="Duplicate layer"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelect(layer.id);
+                  onDuplicate?.(layer.id);
+                }}
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-colors hover:bg-indigo-500/20 hover:text-indigo-300 group-hover:opacity-100"
+              >
+                <Copy className="size-3.5" />
               </button>
               <button
                 type="button"

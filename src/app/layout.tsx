@@ -30,6 +30,19 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="h-full overflow-hidden bg-[#09090b] text-zinc-200">
+        {/* Editor canvas fonts: plain stylesheet instead of next/font because
+            Fabric needs the real family names ("Anton"), and next/font only
+            exposes hashed ones. Keep in sync with lib/editor/fonts.ts. */}
+        <link rel="preconnect" href="https://fonts.googleapis.com" />
+        <link
+          rel="preconnect"
+          href="https://fonts.gstatic.com"
+          crossOrigin="anonymous"
+        />
+        <link
+          rel="stylesheet"
+          href="https://fonts.googleapis.com/css2?family=Anton&family=Bebas+Neue&family=Alfa+Slab+One&family=Oswald:wght@400;700&family=Pacifico&family=Caveat:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=Montserrat:wght@400;700&family=Poppins:wght@400;700&display=swap"
+        />
         {children}
         <Toaster
           theme="dark"

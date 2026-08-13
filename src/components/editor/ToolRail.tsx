@@ -53,7 +53,7 @@ export function ToolRail({ tool, onTool, onAddShape, onUpload }: ToolRailProps) 
   return (
     <nav
       ref={railRef}
-      className="pointer-events-auto absolute left-4 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-1 rounded-2xl border border-slate-800/60 bg-zinc-900/60 p-1.5 shadow-2xl shadow-black/40 backdrop-blur-xl"
+      className="pointer-events-auto absolute left-4 top-1/2 z-30 flex -translate-y-1/2 flex-col gap-1 rounded-2xl border border-white/[0.08] bg-zinc-900/60 p-1.5 shadow-2xl shadow-black/40 backdrop-blur-xl"
     >
       {TOOLS.map(({ id, label, shortcut, icon: Icon }) => {
         const active = tool === id;
@@ -74,7 +74,7 @@ export function ToolRail({ tool, onTool, onAddShape, onUpload }: ToolRailProps) 
             }`}
           >
             <Icon className="size-[18px]" />
-            <span className="pointer-events-none absolute left-full ml-3 hidden whitespace-nowrap rounded-lg border border-slate-800/60 bg-zinc-900/95 px-2.5 py-1 text-xs text-zinc-200 shadow-xl group-hover:block">
+            <span className="pointer-events-none absolute left-full ml-3 hidden whitespace-nowrap rounded-lg border border-white/[0.08] bg-zinc-900/95 px-2.5 py-1 text-xs text-zinc-200 shadow-xl group-hover:block">
               {label}
               <kbd className="ml-2 rounded bg-zinc-800 px-1 font-mono text-[10px] text-zinc-400">
                 {shortcut}
@@ -100,7 +100,7 @@ export function ToolRail({ tool, onTool, onAddShape, onUpload }: ToolRailProps) 
           <Shapes className="size-[18px]" />
         </button>
         {shapesOpen && (
-          <div className="absolute left-full top-0 ml-3 flex w-36 flex-col gap-0.5 rounded-xl border border-slate-800/60 bg-zinc-900/95 p-1.5 shadow-2xl shadow-black/50 backdrop-blur-xl">
+          <div className="absolute left-full top-0 ml-3 flex w-36 flex-col gap-0.5 rounded-xl border border-white/[0.08] bg-zinc-900/95 p-1.5 shadow-2xl shadow-black/50 backdrop-blur-xl">
             {SHAPES.map(({ kind, label, icon: Icon }) => (
               <button
                 key={kind}
@@ -119,7 +119,7 @@ export function ToolRail({ tool, onTool, onAddShape, onUpload }: ToolRailProps) 
         )}
       </div>
 
-      <div className="mx-auto my-1 h-px w-6 bg-slate-800/70" aria-hidden />
+      <div className="mx-auto my-1 h-px w-6 bg-white/[0.08]" aria-hidden />
 
       <button
         type="button"
@@ -128,7 +128,7 @@ export function ToolRail({ tool, onTool, onAddShape, onUpload }: ToolRailProps) 
         className="group relative flex size-10 items-center justify-center rounded-xl text-zinc-400 transition-all hover:bg-zinc-800/80 hover:text-zinc-100"
       >
         <ImagePlus className="size-[18px]" />
-        <span className="pointer-events-none absolute left-full ml-3 hidden whitespace-nowrap rounded-lg border border-slate-800/60 bg-zinc-900/95 px-2.5 py-1 text-xs text-zinc-200 shadow-xl group-hover:block">
+        <span className="pointer-events-none absolute left-full ml-3 hidden whitespace-nowrap rounded-lg border border-white/[0.08] bg-zinc-900/95 px-2.5 py-1 text-xs text-zinc-200 shadow-xl group-hover:block">
           Add images
         </span>
       </button>
