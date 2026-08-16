@@ -20,6 +20,7 @@ import {
   Sparkles,
   Trash2,
   Ungroup,
+  X,
 } from "lucide-react";
 import {
   FONT_FAMILIES,
@@ -52,6 +53,7 @@ interface PropertiesPanelProps {
   onUngroup: () => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onClose?: () => void;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -71,10 +73,12 @@ function Header({
   icon: Icon,
   title,
   badge,
+  onClose,
 }: {
   icon: typeof Frame;
   title: string;
   badge?: string;
+  onClose?: () => void;
 }) {
   return (
     <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
@@ -86,6 +90,16 @@ function Header({
         <span className="ml-auto rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
           {badge}
         </span>
+      )}
+      {onClose && (
+        <button
+          type="button"
+          onClick={onClose}
+          title="Close"
+          className="lg:hidden ml-auto flex size-6 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+        >
+          <X className="size-3.5" />
+        </button>
       )}
     </header>
   );
@@ -168,7 +182,7 @@ function ColorPickerInput({
             className="fixed inset-0 z-40"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-full top-0 mr-3 z-50 flex w-56 flex-col gap-2.5 rounded-2xl border border-white/[0.1] bg-zinc-900/95 p-3 shadow-2xl shadow-black/80 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
+          <div className="absolute right-0 sm:right-full top-full sm:top-0 mt-2 sm:mt-0 sm:mr-3 z-50 flex w-56 flex-col gap-2.5 rounded-2xl border border-white/[0.1] bg-zinc-900/95 p-3 shadow-2xl shadow-black/80 backdrop-blur-xl animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] pb-2">
               <div className="flex items-center gap-2">
                 <span
@@ -244,6 +258,7 @@ export function PropertiesPanel({
   onUngroup,
   onDuplicate,
   onDelete,
+  onClose,
 }: PropertiesPanelProps) {
   const { text, image, shape } = selection;
   const [tab, setTab] = useState<"style" | "adjust">("style");
@@ -255,7 +270,7 @@ export function PropertiesPanel({
   if (cropping) {
     return (
       <section className={glass}>
-        <Header icon={Crop} title="Crop" />
+        <Header icon={Crop} title="Crop" onClose={onClose} />
         <div className="flex flex-col gap-3 p-4">
           <p className="text-[11px] leading-relaxed text-zinc-500">
             Drag the handles to choose what to keep — the dimmed area gets cut
@@ -293,7 +308,7 @@ export function PropertiesPanel({
     const imageSelected = selection.count === 1 && selection.kind === "image";
     return (
       <section className={glass}>
-        <Header icon={Eraser} title="Eraser" />
+        <Header icon={Eraser} title="Eraser" onClose={onClose} />
         <div className="flex flex-col gap-3 p-4">
           <Row label="Size">
             <input
@@ -327,7 +342,7 @@ export function PropertiesPanel({
   if (selection.count === 0 && tool === "brush") {
     return (
       <section className={glass}>
-        <Header icon={Paintbrush} title="Brush" />
+        <Header icon={Paintbrush} title="Brush" onClose={onClose} />
         <div className="flex flex-col gap-3 p-4">
           <Row label="Type">
             <div className="flex w-full overflow-hidden rounded-lg border border-white/[0.08]">
@@ -384,7 +399,7 @@ export function PropertiesPanel({
   if (selection.count === 0) {
     return (
       <section className={glass}>
-        <Header icon={Frame} title="Canvas" />
+        <Header icon={Frame} title="Canvas" onClose={onClose} />
         <div className="flex flex-col gap-3 p-4">
           <Row label="Background">
             <span className="font-mono text-[11px] text-zinc-500">
@@ -433,6 +448,7 @@ export function PropertiesPanel({
             ? (selection.kind ?? undefined)
             : `${selection.count} selected`
         }
+        onClose={onClose}
       />
 
       {image && (

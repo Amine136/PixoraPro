@@ -15,11 +15,18 @@ import { useAgent } from "@/lib/agent/useAgent";
 
 interface AgentPanelProps {
   editor: EditorApi;
+  isOpen?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function AgentPanel({ editor }: AgentPanelProps) {
+export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
   const { items, busy, confirm, run, stop, clear } = useAgent(editor);
-  const [open, setOpen] = useState(false);
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isOpen !== undefined ? isOpen : internalOpen;
+  const setOpen = (val: boolean) => {
+    setInternalOpen(val);
+    onOpenChange?.(val);
+  };
   const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -42,20 +49,29 @@ export function AgentPanel({ editor }: AgentPanelProps) {
         <div className="absolute inset-0 z-30 cursor-wait" aria-hidden />
       )}
 
+      {/* Desktop trigger button (hidden on mobile since bottom dock has it) */}
       {!open && (
         <button
           type="button"
           onClick={() => setOpen(true)}
           title="AI assistant"
-          className="absolute bottom-4 left-20 z-40 flex items-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
+          className="hidden lg:flex absolute bottom-4 left-20 z-40 items-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
         >
           <Sparkles className="size-4" />
           Assistant
         </button>
       )}
 
+      {/* Mobile Backdrop */}
       {open && (
-        <section className="absolute bottom-4 left-20 z-40 flex max-h-[70dvh] w-96 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/70 shadow-2xl shadow-black/40 backdrop-blur-xl">
+        <div
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-xs lg:hidden animate-in fade-in duration-150"
+          onClick={() => setOpen(false)}
+        />
+      )}
+
+      {open && (
+        <section className="fixed lg:absolute bottom-2 sm:bottom-4 inset-x-2 sm:inset-x-auto sm:left-4 lg:left-20 z-50 flex max-h-[85dvh] lg:max-h-[70dvh] w-auto sm:w-96 flex-col rounded-2xl border border-white/[0.1] lg:border-white/[0.08] bg-zinc-900/95 lg:bg-zinc-900/70 shadow-2xl shadow-black/60 backdrop-blur-2xl animate-in fade-in zoom-in-95 duration-150">
           <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
             <Sparkles className="size-4 text-indigo-400" />
             <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">

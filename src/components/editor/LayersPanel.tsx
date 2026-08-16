@@ -13,6 +13,7 @@ import {
   Shapes,
   Trash2,
   Type,
+  X,
 } from "lucide-react";
 import type { LayerItem, LayerKind } from "@/lib/editor/types";
 
@@ -23,6 +24,7 @@ interface LayersPanelProps {
   onDuplicate?: (id: string) => void;
   onDelete: (id: string) => void;
   onReorder: (from: number, to: number) => void;
+  onClose?: () => void;
 }
 
 const KIND_ICON: Record<LayerKind, typeof ImageIcon> = {
@@ -40,12 +42,13 @@ export function LayersPanel({
   onDuplicate,
   onDelete,
   onReorder,
+  onClose,
 }: LayersPanelProps) {
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
+    <section className="flex min-h-0 flex-1 flex-col rounded-2xl border border-white/[0.08] bg-zinc-900/70 lg:bg-zinc-900/60 shadow-2xl shadow-black/40 backdrop-blur-xl">
       <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
         <Layers className="size-4 text-indigo-400" />
         <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
@@ -54,6 +57,16 @@ export function LayersPanel({
         <span className="ml-auto rounded-md bg-zinc-800/80 px-1.5 py-0.5 font-mono text-[10px] text-zinc-500">
           {layers.length}
         </span>
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            title="Close"
+            className="lg:hidden ml-1 flex size-6 items-center justify-center rounded-md text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          >
+            <X className="size-3.5" />
+          </button>
+        )}
       </header>
 
       {layers.length === 0 ? (
@@ -146,8 +159,8 @@ export function LayersPanel({
                 }}
                 className={`flex size-6 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-zinc-700/70 ${
                   layer.visible
-                    ? "text-zinc-500 opacity-0 group-hover:opacity-100"
-                    : "text-zinc-500"
+                    ? "text-zinc-500 opacity-80 sm:opacity-0 sm:group-hover:opacity-100"
+                    : "text-zinc-400 opacity-100"
                 } hover:text-zinc-200`}
               >
                 {layer.visible ? (
@@ -164,7 +177,9 @@ export function LayersPanel({
                   onSelect(layer.id);
                   onDuplicate?.(layer.id);
                 }}
-                className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-colors hover:bg-indigo-500/20 hover:text-indigo-300 group-hover:opacity-100"
+                className={`flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-indigo-500/20 hover:text-indigo-300 ${
+                  layer.selected ? "opacity-100" : "opacity-0 sm:group-hover:opacity-100"
+                }`}
               >
                 <Copy className="size-3.5" />
               </button>
@@ -175,7 +190,9 @@ export function LayersPanel({
                   e.stopPropagation();
                   onDelete(layer.id);
                 }}
-                className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 opacity-0 transition-colors hover:bg-red-500/20 hover:text-red-400 group-hover:opacity-100"
+                className={`flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-red-500/20 hover:text-red-400 ${
+                  layer.selected ? "opacity-100" : "opacity-0 sm:group-hover:opacity-100"
+                }`}
               >
                 <Trash2 className="size-3.5" />
               </button>

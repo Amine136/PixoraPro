@@ -705,14 +705,16 @@ export function useEditor() {
     const ab = artboardRef.current;
     const el = containerRef.current;
     if (!c || !ab || !el) return;
-    // Visible region between the floating tool rail / right panel / top bar
-    const padL = 88;
-    const padR = 320;
-    const padT = 96;
-    const padB = 48;
-    const vw = Math.max(200, el.clientWidth - padL - padR);
-    const vh = Math.max(200, el.clientHeight - padT - padB);
-    const z = Math.min(vw / ab.width!, vh / ab.height!, 1.5) * 0.92;
+    const isMobile = el.clientWidth < 768;
+    const isTablet = el.clientWidth >= 768 && el.clientWidth < 1024;
+    // Padding accounting for TopBar (~56px) and Bottom Dock (~52px) on mobile/tablet
+    const padL = isMobile ? 12 : isTablet ? 24 : 88;
+    const padR = isMobile ? 12 : isTablet ? 24 : 320;
+    const padT = isMobile ? 64 : isTablet ? 68 : 88;
+    const padB = isMobile ? 64 : isTablet ? 68 : 48;
+    const vw = Math.max(80, el.clientWidth - padL - padR);
+    const vh = Math.max(80, el.clientHeight - padT - padB);
+    const z = Math.min(vw / ab.width!, vh / ab.height!, 1.5) * (isMobile ? 0.90 : 0.92);
     const tx = padL + (vw - ab.width! * z) / 2;
     const ty = padT + (vh - ab.height! * z) / 2;
     c.setViewportTransform([z, 0, 0, z, tx, ty]);
@@ -2906,22 +2908,31 @@ export function useEditor() {
       canvas.requestRenderAll();
     });
 
+    const getPointerCoords = (e: MouseEvent | TouchEvent) => {
+      if ("touches" in e && e.touches.length > 0) {
+        return { clientX: e.touches[0].clientX, clientY: e.touches[0].clientY };
+      }
+      const me = e as MouseEvent;
+      return { clientX: me.clientX ?? 0, clientY: me.clientY ?? 0 };
+    };
+
     canvas.on("mouse:down", (opt) => {
-      const e = opt.e as MouseEvent;
+      const e = opt.e as MouseEvent | TouchEvent;
       if (erasing && eraseImg) {
         // Fabric just cleared the selection (no target found); keep the
         // image selected so consecutive strokes work.
         canvas.setActiveObject(eraseImg);
         return;
       }
-      const wantsPan =
-        toolRef.current === "pan" || spaceRef.current || e.button === 1;
+      const isMiddle = "button" in e && e.button === 1;
+      const wantsPan = toolRef.current === "pan" || spaceRef.current || isMiddle;
       if (wantsPan) {
         panning = true;
         canvas.selection = false;
         canvas.setCursor("grabbing");
-        lastX = e.clientX;
-        lastY = e.clientY;
+        const coords = getPointerCoords(e);
+        lastX = coords.clientX;
+        lastY = coords.clientY;
         return;
       }
       if (toolRef.current === "text" && !opt.target) {
@@ -2941,10 +2952,11 @@ export function useEditor() {
         return;
       }
       if (!panning) return;
-      const e = opt.e as MouseEvent;
-      canvas.relativePan(new Point(e.clientX - lastX, e.clientY - lastY));
-      lastX = e.clientX;
-      lastY = e.clientY;
+      const e = opt.e as MouseEvent | TouchEvent;
+      const coords = getPointerCoords(e);
+      canvas.relativePan(new Point(coords.clientX - lastX, coords.clientY - lastY));
+      lastX = coords.clientX;
+      lastY = coords.clientY;
       syncGrid();
     });
 
@@ -3241,13 +3253,88 @@ export function useEditor() {
     };
     window.addEventListener("paste", onPaste);
 
-    /* --- keep canvas sized to its container --- */
+    /* --- multi-touch gestures: pinch zoom & two-finger pan --- */
+    let touchStartDist = 0;
+    let touchStartZoom = 1;
+    let touchStartMidX = 0;
+    let touchStartMidY = 0;
+    let isTouchPinching = false;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        isTouchPinching = true;
+        panning = false;
+        touchStartDist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY,
+        );
+        touchStartZoom = canvas.getZoom();
+        touchStartMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        touchStartMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+      }
+    };
+
+    const onTouchMove = (e: TouchEvent) => {
+      if (isTouchPinching && e.touches.length === 2) {
+        e.preventDefault();
+        const dist = Math.hypot(
+          e.touches[0].clientX - e.touches[1].clientX,
+          e.touches[0].clientY - e.touches[1].clientY,
+        );
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+        if (touchStartDist > 0) {
+          const factor = dist / touchStartDist;
+          const targetZoom = Math.min(8, Math.max(0.05, touchStartZoom * factor));
+          const rect = container.getBoundingClientRect();
+          canvas.zoomToPoint(new Point(midX - rect.left, midY - rect.top), targetZoom);
+        }
+
+        const dx = midX - touchStartMidX;
+        const dy = midY - touchStartMidY;
+        if (Math.abs(dx) > 0 || Math.abs(dy) > 0) {
+          canvas.relativePan(new Point(dx, dy));
+          touchStartMidX = midX;
+          touchStartMidY = midY;
+        }
+
+        canvas.requestRenderAll();
+        syncGrid();
+      }
+    };
+
+    const onTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        isTouchPinching = false;
+      }
+    };
+
+    container.addEventListener("touchstart", onTouchStart, { passive: false });
+    container.addEventListener("touchmove", onTouchMove, { passive: false });
+    container.addEventListener("touchend", onTouchEnd, { passive: true });
+
+    /* --- keep canvas sized to its container and centered --- */
+    let prevW = container.clientWidth;
+    let prevH = container.clientHeight;
+
     const ro = new ResizeObserver(() => {
+      const newW = container.clientWidth;
+      const newH = container.clientHeight;
+      if (newW === 0 || newH === 0) return;
+
       canvas.setDimensions({
-        width: container.clientWidth,
-        height: container.clientHeight,
+        width: newW,
+        height: newH,
       });
-      canvas.requestRenderAll();
+
+      if (Math.abs(newW - prevW) > 8 || Math.abs(newH - prevH) > 8) {
+        prevW = newW;
+        prevH = newH;
+        fitToArtboard();
+      } else {
+        canvas.requestRenderAll();
+      }
     });
     ro.observe(container);
 
@@ -3263,6 +3350,9 @@ export function useEditor() {
 
     return () => {
       ro.disconnect();
+      container.removeEventListener("touchstart", onTouchStart);
+      container.removeEventListener("touchmove", onTouchMove);
+      container.removeEventListener("touchend", onTouchEnd);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("paste", onPaste);

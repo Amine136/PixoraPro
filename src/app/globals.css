@@ -15,13 +15,17 @@
 html,
 body {
   height: 100%;
+  height: 100dvh;
   overscroll-behavior: none;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
 }
 
 ::selection {
@@ -55,9 +59,11 @@ select {
 .pixora-scroll {
   scrollbar-width: thin;
   scrollbar-color: rgba(63, 63, 70, 0.8) transparent;
+  -webkit-overflow-scrolling: touch;
 }
 .pixora-scroll::-webkit-scrollbar {
-  width: 8px;
+  width: 6px;
+  height: 6px;
 }
 .pixora-scroll::-webkit-scrollbar-thumb {
   background: rgba(63, 63, 70, 0.8);
@@ -76,12 +82,14 @@ select {
     transparent 1px
   );
   background-size: 24px 24px;
+  touch-action: none;
 }
 
 /* Fabric wraps its canvases in .canvas-container; make sure it fills us */
 .pixora-workspace .canvas-container {
   position: absolute !important;
   inset: 0;
+  touch-action: none;
 }
 
 /* Native color input as a clean round swatch */
@@ -121,16 +129,16 @@ input[type="range"].pixora-range {
 input[type="range"].pixora-range::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
   border-radius: 50%;
   background: #a5b4fc;
   border: 2px solid #09090b;
   cursor: pointer;
 }
 input[type="range"].pixora-range::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
+  width: 14px;
+  height: 14px;
   border-radius: 50%;
   background: #a5b4fc;
   border: 2px solid #09090b;
