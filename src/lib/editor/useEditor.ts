@@ -1629,7 +1629,7 @@ export function useEditor() {
 
       if (obj instanceof IText) {
         if (patch.text !== undefined) {
-          obj.set({ text: patch.text });
+          obj.set({ text: patch.text || "" });
           const abDir = artboardRef.current ? meta(artboardRef.current).direction : "ltr";
           updateTextDirection(obj, abDir);
         }
@@ -1874,7 +1874,7 @@ export function useEditor() {
       if (!c || !ab) return { ok: false, error: "Editor not ready" };
       const abDir = meta(ab).direction ?? "ltr";
       const isArabic = HAS_ARABIC_REGEX.test(opts.text || "");
-      const text = new IText(opts.text, {
+      const text = new IText(opts.text || "", {
         left: opts.x ?? ab.width! / 2,
         top: opts.y ?? ab.height! / 2,
         originX: "center",

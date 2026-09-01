@@ -639,6 +639,9 @@ export async function executeTool(
     }
     case "add_text": {
       const opts = args as unknown as AgentTextOptions;
+      if (!opts.text) {
+        return { content: "Missing required field: text", isError: true };
+      }
       const res = ctx.agentAddText(opts);
       if (!res.ok) return { content: res.error ?? "Failed", isError: true };
       return {
