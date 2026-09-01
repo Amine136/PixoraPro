@@ -3,22 +3,22 @@
 A chat panel where an LLM edits the live Fabric canvas by calling tools
 ("make the title bigger and add a red arrow").
 
-**Key constraint:** Pixora integrates into a parent system that owns all
-provider keys and routes to whichever model it picks. Pixora never holds keys
-or imports a vendor SDK in production — it talks to the parent through one
-provider-agnostic gateway. The agent loop runs in the browser; every agent turn
-is a single undo step.
+**Key constraint:** the app never ships a provider key of its own. Default mode
+is bring-your-own-key — the user supplies a Gemini key in the UI and the browser
+calls Google directly, so no server of ours sees the key, the prompts or the
+canvas. Optionally it can instead point at a parent system's gateway that owns
+the keys (`NEXT_PUBLIC_AGENT_GATEWAY_URL`). The agent loop runs in the browser;
+every agent turn is a single undo step.
 
 ```
 Chat panel → client agent loop → tool executor → Fabric canvas (useEditor)
                      │
-              AgentTransport ── HttpTransport: gateway URL (prod) │ /api/agent (dev)
-                     │
-        Parent system: holds keys, picks the model, returns a normalized stream
+       AgentTransport ── GeminiBrowserTransport: browser → Google (BYOK, default)
+                     └── HttpTransport: parent gateway, when its URL is set
 ```
 
-Swapping providers or pointing at the parent system is a one-file change
-(`transport.ts`).
+Swapping providers or pointing at a gateway is a one-file change
+(`transport.ts`); adding a model is a registry entry (`settings.ts`).
 
 ---
 
@@ -27,12 +27,17 @@ Swapping providers or pointing at the parent system is a one-file change
 - **Editor seam** — by-id mutators, `get_canvas_state` serializer, screenshot,
   one-undo-per-turn batching. Coordinates are artboard-relative, object-center.
 - **Protocol + transport** — neutral `AgentMessage` / `ToolDef` / streamed
-  events as NDJSON, incl. `done{stopReason}` and `error{retryable}`;
-  `HttpTransport` switches gateway vs local `/api/agent` by env.
-- **19 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
+  events, incl. `done{stopReason}` and `error{retryable}`. BYOK streams SSE from
+  Google straight to the browser (`providers/gemini.ts`); gateway mode consumes
+  NDJSON over `HttpTransport`.
+- **BYOK settings** — provider, API key and model chosen in the Assistant panel,
+  persisted per-browser in `localStorage`, key validated against the provider on
+  save (`settings.ts`, `AiSettingsPanel.tsx`).
+- **21 tools** — perceive: `get_canvas_state`, `get_screenshot`, `sample_color`;
   create: `add_text`, `add_shape`; modify: `set_properties`, `adjust_image`,
-  `align_layer`, `distribute_layers`, `arrange_grid`, `set_image_fit`,
-  `place_in_card`, `set_gradient`, `move_layer` (z-order), `duplicate_layer`; structure:
+  `remove_background`, `align_layer`, `distribute_layers`, `arrange_grid`,
+  `set_image_fit`, `crop_image`, `place_in_card`, `set_gradient`,
+  `move_layer` (z-order), `duplicate_layer`; structure:
   `group_layers`, `ungroup_layer`; remove: `delete_layer`; canvas: `set_artboard`.
   Layout + image-fit math is pure and unit-tested in `src/lib/editor/layout.ts`;
   `set_image_fit` cover uses native crop (not clipPath) so bounds stay honest.
@@ -95,8 +100,8 @@ sizes). Priority order:
    parent-system team: endpoint + `NEXT_PUBLIC_AGENT_GATEWAY_URL`, `Authorization`
    bearer, `AgentRequest` JSON, NDJSON `AgentEvent` stream, portable tool-schema
    subset, `signature` round-trip, error/retryable semantics, conformance
-   checklist. Derived from `route.ts`/`gemini.ts`/`protocol.ts`/`transport.ts`,
-   which it names as the runnable reference.
+   checklist. Now marked optional, since BYOK is the default; it names
+   `providers/gemini.ts`/`protocol.ts`/`transport.ts` as the worked example.
 
 > Note: 1–3 move Pixora from edit primitives toward a small layout system. Good
 > for an agent (it works in intent, not coordinates), but a conscious expansion
@@ -106,6 +111,10 @@ sizes). Priority order:
 
 ## Out of Pixora's scope by design
 
-Provider keys, model routing/tiering, billing/quotas — the parent system's job.
-A model picker, if wanted, is just a dropdown feeding the pass-through `model`
-string. Brush/eraser and export-as-a-tool are intentionally excluded.
+Billing and per-account quotas. In BYOK mode the user's own provider key is the
+billing relationship, and the model picker feeds the `model` field of
+`AgentRequest`. In gateway mode, keys and routing are the parent system's job.
+The one cost the deployment does carry is background removal, capped at the
+Cloud Run service behind `/api/remove-bg`.
+
+Brush/eraser and export-as-a-tool are intentionally excluded.

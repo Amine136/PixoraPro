@@ -1,10 +1,11 @@
 /* Provider-neutral agent protocol.
  *
- * Pixora never talks to an LLM vendor directly — the app builds requests in
- * these types and a transport (see transport.ts) delivers them to whatever
- * backend holds the API keys. The wire format is exactly these types: the
- * request as one JSON body, the response as newline-delimited JSON where each
- * line is one AgentEvent.
+ * The app builds requests in these types and a transport (see transport.ts)
+ * delivers them to whatever backend holds the credentials: by default the
+ * user's browser talks straight to the provider with the user's own API key;
+ * optionally a parent system's gateway (docs/agent-gateway.md), in which case
+ * the wire format is exactly these types — the request as one JSON body, the
+ * response as newline-delimited JSON where each line is one AgentEvent.
  */
 
 export type TextPart = { type: "text"; text: string };
@@ -50,7 +51,8 @@ export interface ToolDef {
 }
 
 export interface AgentRequest {
-  /** Pass-through model hint; the backend decides how to honor it. */
+  /** Which model to use. In BYOK mode the browser transport honors it directly;
+   *  a gateway may treat it as a hint. */
   model?: string;
   system: string;
   messages: AgentMessage[];

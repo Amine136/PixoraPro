@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  KeyRound,
   Loader2,
   Send,
   Sparkles,
@@ -12,6 +13,8 @@ import {
 } from "lucide-react";
 import type { EditorApi } from "@/lib/editor/useEditor";
 import { useAgent } from "@/lib/agent/useAgent";
+import { PROVIDERS, DEFAULT_PROVIDER } from "@/lib/agent/settings";
+import { AiSettingsPanel } from "./AiSettingsPanel";
 
 interface AgentPanelProps {
   editor: EditorApi;
@@ -20,7 +23,8 @@ interface AgentPanelProps {
 }
 
 export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
-  const { items, busy, confirm, run, stop, clear } = useAgent(editor);
+  const { items, busy, confirm, needsKey, model, run, stop, clear } =
+    useAgent(editor);
   const [internalOpen, setInternalOpen] = useState(false);
   const open = isOpen !== undefined ? isOpen : internalOpen;
   const setOpen = (val: boolean) => {
@@ -28,6 +32,14 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
     onOpenChange?.(val);
   };
   const [draft, setDraft] = useState("");
+  const [keyFormOpen, setKeyFormOpen] = useState(false);
+  // With no key the assistant can't do anything, so the settings form is pinned
+  // open rather than hidden behind an icon the user has to discover.
+  const showKeyForm = keyFormOpen || needsKey;
+  /** Short label for the header, so the user knows what they're spending on. */
+  const modelLabel =
+    PROVIDERS[DEFAULT_PROVIDER].models.find((m) => m.id === model)?.label ??
+    model;
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -37,7 +49,7 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || busy) return;
+    if (!text || busy || needsKey) return;
     setDraft("");
     void run(text);
   };
@@ -54,11 +66,14 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          title="AI assistant"
+          title={needsKey ? "AI assistant — API key needed" : "AI assistant"}
           className="hidden lg:flex absolute bottom-4 left-20 z-40 items-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
         >
           <Sparkles className="size-4" />
           Assistant
+          {needsKey && (
+            <KeyRound className="size-3.5 text-amber-400" aria-hidden />
+          )}
         </button>
       )}
 
@@ -73,16 +88,40 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
       {open && (
         <section className="fixed lg:absolute bottom-2 sm:bottom-4 inset-x-2 sm:inset-x-auto sm:left-4 lg:left-20 z-50 flex max-h-[85dvh] lg:max-h-[70dvh] w-auto sm:w-96 flex-col rounded-2xl border border-white/[0.1] lg:border-white/[0.08] bg-zinc-900/95 lg:bg-zinc-900/70 shadow-2xl shadow-black/60 backdrop-blur-2xl animate-in fade-in zoom-in-95 duration-150">
           <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
-            <Sparkles className="size-4 text-indigo-400" />
+            <Sparkles className="size-4 shrink-0 text-indigo-400" />
             <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
               Assistant
             </h2>
+            {!needsKey && (
+              <span
+                className="min-w-0 truncate text-[10px] text-zinc-600"
+                title={`Model: ${modelLabel}`}
+              >
+                {modelLabel}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => setKeyFormOpen((v) => !v)}
+              title={needsKey ? "Add your Gemini API key" : "AI settings"}
+              aria-label={needsKey ? "Add your Gemini API key" : "AI settings"}
+              aria-expanded={showKeyForm}
+              className={`ml-auto flex size-6 shrink-0 items-center justify-center rounded-md transition-colors ${
+                needsKey
+                  ? "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+                  : showKeyForm
+                    ? "bg-zinc-800/80 text-zinc-300"
+                    : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-300"
+              }`}
+            >
+              <KeyRound className="size-3.5" />
+            </button>
             {items.length > 0 && !busy && (
               <button
                 type="button"
                 onClick={clear}
                 title="Clear conversation"
-                className="ml-auto flex size-6 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
+                className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
               >
                 <Trash2 className="size-3.5" />
               </button>
@@ -91,11 +130,17 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
               type="button"
               onClick={() => setOpen(false)}
               title="Close"
-              className={`flex size-6 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300 ${items.length > 0 && !busy ? "" : "ml-auto"}`}
+              className="flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-500 transition-colors hover:bg-zinc-800/80 hover:text-zinc-300"
             >
               <X className="size-3.5" />
             </button>
           </header>
+
+          {showKeyForm && (
+            <div className="border-b border-white/[0.06] bg-zinc-950/40 px-4 py-3">
+              <AiSettingsPanel onSaved={() => setKeyFormOpen(false)} />
+            </div>
+          )}
 
           <div
             ref={scrollRef}
@@ -103,9 +148,19 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
           >
             {items.length === 0 && (
               <p className="py-6 text-center text-xs leading-relaxed text-zinc-500">
-                Describe an edit and I&apos;ll do it on the canvas —<br />
-                “add a bold title at the top”, “make the image warmer”,
-                “center the logo”.
+                {needsKey ? (
+                  <>
+                    Add your Gemini API key above to start.
+                    <br />
+                    It stays in this browser.
+                  </>
+                ) : (
+                  <>
+                    Describe an edit and I&apos;ll do it on the canvas —<br />
+                    “add a bold title at the top”, “make the image warmer”,
+                    “center the logo”.
+                  </>
+                )}
               </p>
             )}
             {items.map((item, i) =>
@@ -201,8 +256,14 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
                     submit();
                   }
                 }}
-                placeholder={busy ? "Agent is editing…" : "Ask for an edit…"}
-                disabled={busy}
+                placeholder={
+                  busy
+                    ? "Agent is editing…"
+                    : needsKey
+                      ? "Add your API key to start…"
+                      : "Ask for an edit…"
+                }
+                disabled={busy || needsKey}
                 rows={2}
                 className="min-h-0 flex-1 resize-none rounded-xl border border-white/[0.08] bg-zinc-950/60 px-3 py-2 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-indigo-500/60 focus:outline-none disabled:opacity-60"
               />
@@ -219,7 +280,7 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
                 <button
                   type="button"
                   onClick={submit}
-                  disabled={!draft.trim()}
+                  disabled={!draft.trim() || needsKey}
                   title="Send"
                   className="flex size-9 items-center justify-center rounded-xl bg-indigo-500/80 text-white transition-colors hover:bg-indigo-500 disabled:opacity-40"
                 >

@@ -8,6 +8,7 @@ import type {
   ToolResultPart,
 } from "./protocol";
 import { createTransport } from "./transport";
+import { useAiSettings } from "./settings";
 import { compactHistory } from "./history";
 import { executeTool, SYSTEM_PROMPT, TOOL_DEFS } from "./tools";
 
@@ -70,6 +71,10 @@ export function useAgent(editor: AgentEditorApi) {
    *  out-of-band edits (manual changes, undo) that make history stale. */
   const lastCanvasStateRef = useRef<string | null>(null);
   const transport = useMemo(() => createTransport(), []);
+  /** The user's own key and chosen model. The transport reads both from storage
+   *  at send time; this hook needs them to gate sending and to pass the model. */
+  const { hasKey, model, loaded: settingsLoaded } = useAiSettings();
+  const needsKey = settingsLoaded && !hasKey;
 
   const patchLast = useCallback((patch: Partial<ChatItem>) => {
     setItems((prev) => {
@@ -85,6 +90,24 @@ export function useAgent(editor: AgentEditorApi) {
   const run = useCallback(
     async (instruction: string) => {
       if (busy || !instruction.trim()) return;
+
+      // Fail before any canvas turn is opened: without a key there is nothing
+      // to send, and the message names the exact fix.
+      if (needsKey) {
+        setItems((prev) => [
+          ...prev,
+          { role: "user", text: instruction, actions: [] },
+          {
+            role: "assistant",
+            text: "",
+            actions: [],
+            error:
+              "Add your Gemini API key first — click the key icon above. It stays in this browser.",
+          },
+        ]);
+        return;
+      }
+
       setBusy(true);
       const controller = new AbortController();
       abortRef.current = controller;
@@ -161,6 +184,7 @@ export function useAgent(editor: AgentEditorApi) {
 
           for await (const event of transport.send(
             {
+              model,
               system: SYSTEM_PROMPT,
               messages: compactHistory(conversationRef.current),
               tools: TOOL_DEFS,
@@ -327,7 +351,7 @@ export function useAgent(editor: AgentEditorApi) {
         setBusy(false);
       }
     },
-    [busy, editor, transport, patchLast],
+    [busy, editor, transport, patchLast, needsKey, model],
   );
 
   const stop = useCallback(() => {
@@ -341,5 +365,5 @@ export function useAgent(editor: AgentEditorApi) {
     setItems([]);
   }, [busy]);
 
-  return { items, busy, confirm, run, stop, clear };
+  return { items, busy, confirm, needsKey, model, run, stop, clear };
 }

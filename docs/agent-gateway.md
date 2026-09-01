@@ -1,22 +1,34 @@
 # Pixora Agent Gateway — Integration Contract
 
+> **Status: optional.** Pixora's default mode is bring-your-own-key: the user
+> pastes their own Gemini API key in the Assistant panel and the browser calls
+> Google directly (`src/lib/agent/providers/gemini.ts`). No Pixora server is in
+> that path, and the only server-side endpoint the app has is
+> `/api/remove-bg`.
+>
+> This document describes the *alternative* mode, for embedding Pixora in a
+> parent system that owns the provider keys and billing. It activates when
+> `NEXT_PUBLIC_AGENT_GATEWAY_URL` is set; everything below then applies. When it
+> is unset, none of it does.
+
 For the parent-system team. This is the one contract Pixora's agent mode needs
 from you: a single HTTP endpoint that takes a provider-neutral request and
-streams back provider-neutral events. Pixora holds no provider keys and imports
-no vendor SDK in production — your gateway is the only thing that talks to an LLM.
+streams back provider-neutral events. In gateway mode Pixora holds no provider
+keys — your gateway is the only thing that talks to an LLM.
 
-The local dev route `src/app/api/agent/route.ts` is a **runnable reference
-implementation** of this exact contract (backed by Anthropic; a Gemini variant
-lives in `gemini.ts`). If prose here and that code ever disagree, the code wins —
-read it.
+The neutral types are defined in `src/lib/agent/protocol.ts`, and
+`src/lib/agent/transport.ts` (`HttpTransport`) is the client that consumes your
+endpoint. There is no longer a server-side reference implementation in this repo
+— the former `src/app/api/agent/route.ts` was removed when BYOK became the
+default. If prose here and the code ever disagree, the code wins.
 
 ---
 
 ## 1. Endpoint & wiring
 
 - **Method / path:** `POST` to whatever URL you provide. Pixora reads it from the
-  build-time env var `NEXT_PUBLIC_AGENT_GATEWAY_URL`. When unset, Pixora falls
-  back to the local dev route `/api/agent`.
+  build-time env var `NEXT_PUBLIC_AGENT_GATEWAY_URL`. When unset, Pixora uses
+  BYOK (browser → provider) and never calls a gateway.
 - **Request content type:** `application/json`
 - **Response content type:** `application/x-ndjson` (newline-delimited JSON; see
   §4). Send `cache-control: no-store`.
@@ -25,6 +37,9 @@ read it.
   the canvas, then POSTs again with the results appended to `messages`. A single
   user request is up to ~15 of these round-trips. Your endpoint is stateless — it
   receives the full conversation every call and keeps nothing between calls.
+- **`model`** on the request carries the user's selection. In BYOK mode it is
+  honored directly; a gateway may treat it as a hint and map it to whatever it
+  offers.
 
 ### Authorization
 
@@ -77,8 +92,8 @@ Source of truth: `src/lib/agent/protocol.ts`.
 }
 ```
 
-- `model` is only a **hint**. You own model routing/tiering; honor it or ignore
-  it. (The dev route uses it only to pick provider family, else a default.)
+- `model` carries the user's selection. You own model routing/tiering; honor it
+  or map it to your own tiers.
 - `system` is a large, stable string. Prefix-cache it if your provider supports
   it — the volatile canvas state and screenshots live in `messages`, after it.
 - `tools` is sent **every call** (stateless endpoint). Pass them to the provider
@@ -204,6 +219,8 @@ inspect, transform, or generate it.
 - [ ] Round-trips `signature` unchanged when the provider uses it.
 - [ ] Treats each call as stateless — no server-side conversation memory.
 
-Reference implementation: `src/app/api/agent/route.ts` (Anthropic),
-`src/app/api/agent/gemini.ts` (Gemini + `signature`). Types:
-`src/lib/agent/protocol.ts`. Transport/headers: `src/lib/agent/transport.ts`.
+Worked example of this mapping, including `signature` round-tripping:
+`src/lib/agent/providers/gemini.ts` — it targets Google's OpenAI-compatible
+endpoint from the browser, but the neutral→provider→neutral translation is the
+same job a gateway does. Types: `src/lib/agent/protocol.ts`. Transport/headers:
+`src/lib/agent/transport.ts`.

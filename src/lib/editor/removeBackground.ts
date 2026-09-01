@@ -1,12 +1,18 @@
-const BG_REMOVE_URL =
-  process.env.NEXT_PUBLIC_BG_REMOVE_URL ||
-  "https://bg-remove-fast-103097152384.europe-west3.run.app/api/remove-bg";
+/* AI background removal, via this app's own /api/remove-bg proxy.
+ *
+ * The Cloud Run endpoint and its token deliberately live on the server (see
+ * src/app/api/remove-bg/route.ts): a NEXT_PUBLIC_ credential would be compiled
+ * into this bundle and readable by every visitor. The browser sends only the
+ * image. */
 
-const BG_REMOVE_TOKEN =
-  process.env.NEXT_PUBLIC_BG_REMOVE_TOKEN ||
-  "bg_fast_2de0fba96726d62084b886b6ae0f87bddfa58e2765e3fd5a932ea28403e7cf40";
+const PROXY_URL = "/api/remove-bg";
 
 const MAX_DIMENSION = 1024;
+
+/** Cloud Run cold-starts a segmentation model, which can take tens of seconds
+ *  on the first request. Without a ceiling a stalled request hangs the UI
+ *  spinner with no explanation. */
+const REQUEST_TIMEOUT_MS = 90_000;
 
 /** Ensures the image does not exceed 1024px on its longest edge,
  *  preserving aspect ratio for non-square (non-1:1) images.
@@ -71,9 +77,65 @@ async function constrainImageTo1K(inputBlob: Blob): Promise<Blob> {
   });
 }
 
-/** Serverless AI background removal powered by Google Cloud Run (rembg / ISNet).
- *  Handles complex photos, gradients, and scenery with zero client-side WASM overhead.
- *  Automatically scales images > 1024px down to 1K while preserving aspect ratio. */
+/** Turn a failed proxy response into a message worth showing the user. The
+ *  proxy relays the service's own quota text, which is the one case where the
+ *  upstream wording is more useful than ours. */
+async function proxyError(res: Response): Promise<Error> {
+  let detail = "";
+  try {
+    const body = (await res.json()) as { error?: string };
+    detail = body.error ?? "";
+  } catch {
+    // no JSON body
+  }
+  if (res.status === 429) {
+    return new Error(
+      detail ||
+        "Background removal limit reached for now. Try again later, or remove the background manually.",
+    );
+  }
+  if (res.status === 503) {
+    return new Error(
+      detail || "Background removal isn't available on this deployment.",
+    );
+  }
+  if (res.status === 413) {
+    return new Error(detail || "This image is too large to process.");
+  }
+  return new Error(detail || `Background removal failed (${res.status}).`);
+}
+
+async function postToProxy(
+  body: FormData | string,
+  json = false,
+): Promise<Blob> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(PROXY_URL, {
+      method: "POST",
+      ...(json ? { headers: { "Content-Type": "application/json" } } : {}),
+      body,
+      signal: controller.signal,
+    });
+    if (!res.ok) throw await proxyError(res);
+    return await res.blob();
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        "Background removal timed out. The service may be starting up — try again.",
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Serverless AI background removal (rembg / ISNet on Cloud Run), reached
+ *  through this app's server so the service credential is never exposed.
+ *  Images larger than 1024px on the long edge are scaled down first, preserving
+ *  aspect ratio. */
 export async function removeBackgroundAI(src: string): Promise<Blob> {
   let rawBlob: Blob;
 
@@ -85,51 +147,21 @@ export async function removeBackgroundAI(src: string): Promise<Blob> {
       const res = await fetch(src);
       rawBlob = await res.blob();
     } catch {
-      // If client fetch fails due to CORS, send image_url directly in JSON payload
-      const jsonRes = await fetch(BG_REMOVE_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Internal-Secret": BG_REMOVE_TOKEN,
-        },
-        body: JSON.stringify({ image_url: src }),
-      });
-      if (!jsonRes.ok) {
-        throw new Error(`Serverless background removal failed (${jsonRes.status})`);
-      }
-      return await jsonRes.blob();
+      // The browser can't read these bytes (CORS); let the service fetch the
+      // URL itself. No downscaling is possible on this path.
+      return postToProxy(JSON.stringify({ image_url: src }), true);
     }
   } else {
     const res = await fetch(src);
     rawBlob = await res.blob();
   }
 
-  // Constrain to 1024px maximum (preserving aspect ratio) before sending over wire
+  // Constrain to 1024px on the long edge before sending over the wire.
   const preparedBlob = await constrainImageTo1K(rawBlob);
 
   const formData = new FormData();
   formData.append("file", preparedBlob, "image.png");
-
-  const response = await fetch(BG_REMOVE_URL, {
-    method: "POST",
-    headers: {
-      "X-Internal-Secret": BG_REMOVE_TOKEN,
-    },
-    body: formData,
-  });
-
-  if (!response.ok) {
-    let errorDetail = `HTTP ${response.status}`;
-    try {
-      const errJson = await response.json();
-      errorDetail = errJson.detail || errorDetail;
-    } catch {
-      // ignore
-    }
-    throw new Error(`Serverless background removal failed: ${errorDetail}`);
-  }
-
-  return await response.blob();
+  return postToProxy(formData);
 }
 
 /** Fraction of the image border that is already transparent (alpha < 16).

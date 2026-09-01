@@ -2,7 +2,7 @@
 
 <div align="center">
 
-  ![Pixora AI Editor Overview](public/docs/hero-banner.jpg)
+  ![Pixora AI Editor Overview](docs/assets/hero-banner.jpg)
 
   **Next-Generation Canvas & Image Editor Powered by Multi-Layer Autonomous AI Agents**
 
@@ -34,7 +34,7 @@ Give the AI Assistant a single natural language instruction:
 
 | 1. Initial Raw Image Prompt | 2. Real-Time AI Agent Execution | 3. Finished Layered Design |
 | :---: | :---: | :---: |
-| ![Initial State](public/docs/hero-editor-prompt.png) | ![Agent Building Ad](public/docs/agent-building-ad.png) | ![Finished Canvas](public/docs/agent-finished-ad.png) |
+| ![Initial State](docs/assets/hero-editor-prompt.png) | ![Agent Building Ad](docs/assets/agent-building-ad.png) | ![Finished Canvas](docs/assets/agent-finished-ad.png) |
 | *User uploads raw product photo and enters natural language goal.* | *Agent removes background, adds background cards, typography, badges & shadows.* | *Final editable layout with full layer stack and fine-grained controls.* |
 
 ---
@@ -47,7 +47,7 @@ The agent automatically formats typography, colors, CTA buttons, and product pla
 
 | Organic Honey Product Ad | Herbal Tea Campaign (Arabic RTL) | Smartwatch Product Ad (Dark Mode) |
 | :---: | :---: | :---: |
-| ![Honey Ad Export](public/docs/export-honey-ad.png) | ![Herbal Tea Export](public/docs/export-herbal-tea.png) | ![Smartwatch Export](public/docs/export-smart-watch.png) |
+| ![Honey Ad Export](docs/assets/export-honey-ad.png) | ![Herbal Tea Export](docs/assets/export-herbal-tea.png) | ![Smartwatch Export](docs/assets/export-smart-watch.png) |
 | *Clean Minimalist Aesthetic* | *RTL Typography & CTA Buttons* | *Dark Mode & Vibrant Badges* |
 
 </div>
@@ -99,7 +99,7 @@ Pixora's agent operates via a neutral protocol behind an `AgentTransport` interf
 
 ## 🛠️ Editor UI Features
 
-![Editor Workspace Overview](public/docs/editor-ui-overview.png)
+![Editor Workspace Overview](docs/assets/editor-ui-overview.png)
 
 - **Interactive Canvas Engine**: Built on Fabric.js v7 with smooth object transformation handles, rotation, and selection.
 - **Layer Panel**: Drag-and-drop layer reordering, lock, hide/show toggle, and layer naming.
@@ -123,27 +123,36 @@ npm install
 ```
 
 ### 3. Environment Configuration
-Copy `.env.example` to create your local `.env.local` file:
+No AI provider key belongs in the environment. Each user pastes their own Gemini
+key in the Assistant panel (key icon); it is saved in that browser's
+`localStorage` and sent **only to Google, from the browser** — it never reaches
+this app's server.
+
+The one server-side secret is the background-removal service, which is proxied so
+its token stays off the client:
 
 ```bash
 cp .env.example .env.local
 ```
 
-Add your AI provider key to `.env.local`:
 ```env
-# Gemini API Key (Recommended for fast dev execution)
-GEMINI_API_KEY=your_gemini_api_key_here
-
-# Alternatively, set Anthropic API Key if using Claude
-# ANTHROPIC_API_KEY=your_anthropic_api_key_here
+# Server-only — NOT NEXT_PUBLIC_, or the token would be inlined into the
+# client bundle and readable by every visitor.
+BG_REMOVE_URL=https://your-cloud-run-service.run.app/api/remove-bg
+BG_REMOVE_TOKEN=your_bg_remove_token_here
 ```
+
+Background removal is optional: without it, the editor falls back to
+client-side flood-fill removal, which handles flat backgrounds only.
 
 ### 4. Run Development Server
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser.
+Open [http://localhost:3000](http://localhost:3000) in your browser, then open
+the Assistant panel, paste a [Google AI Studio](https://aistudio.google.com/apikey)
+key and pick a model to enable AI edits.
 
 ---
 
@@ -151,20 +160,19 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ```
 PixoraPro/
-├── public/
-│   └── docs/                     # Documentation screenshots & exports
 ├── docs/
+│   ├── assets/                   # Documentation screenshots & exports
 │   ├── agent-mode-plan.md        # AI Agent architecture specification
-│   ├── agent-gateway.md         # Production gateway protocol guide
+│   ├── agent-gateway.md         # Optional gateway protocol guide
 │   └── agent-eval.md            # Benchmark evaluation suite
 ├── src/
 │   ├── app/
-│   │   ├── api/agent/            # Agent API route (Gemini & Anthropic dev backends)
+│   │   ├── api/remove-bg/        # Cloud Run proxy (keeps the token server-side)
 │   │   └── page.tsx              # Main editor application page
 │   ├── components/
-│   │   └── editor/               # Canvas, AgentPanel, TopBar, PropertiesPanel
+│   │   └── editor/               # Canvas, AgentPanel, AiSettingsPanel, TopBar
 │   └── lib/
-│       ├── agent/                # Protocol, tool definitions, transport & client loop
+│       ├── agent/                # Protocol, tools, settings, browser providers
 │       └── editor/               # Fabric.js hook (useEditor) & state handlers
 ├── .env.example                  # Environment configuration template
 └── README.md                     # Main repository documentation

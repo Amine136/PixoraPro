@@ -1,27 +1,65 @@
 import type { AgentEvent, AgentRequest } from "./protocol";
+import { streamGemini } from "./providers/gemini";
+import { readApiKey, readModel } from "./settings";
 
-/* The only layer that knows how to reach an LLM backend. Both endpoints —
- * the local dev route (/api/agent) and the parent system's gateway — speak
- * the same wire format: POST AgentRequest as JSON, receive an NDJSON stream
- * of AgentEvent. Swapping backends is a URL + headers change. */
+/* The only layer that knows how to reach a model.
+ *
+ * Two modes, same AgentEvent stream, so the agent loop in useAgent.ts is
+ * identical in both:
+ *
+ *  - BYOK (default): the browser calls the provider's API directly with the
+ *    user's own key. No Pixora server is in the path — the key, the prompts and
+ *    the canvas screenshots never reach us.
+ *  - Gateway: when NEXT_PUBLIC_AGENT_GATEWAY_URL is set, POST the neutral
+ *    request to a parent system's endpoint which holds the provider keys (see
+ *    docs/agent-gateway.md). */
 
 export interface AgentTransport {
   send(req: AgentRequest, signal?: AbortSignal): AsyncGenerator<AgentEvent>;
 }
 
+/** BYOK: straight from this browser to Google, using the key and model the user
+ *  chose in the UI. Both are read at send time, so changing either takes effect
+ *  on the next message without rebuilding anything. */
+export class GeminiBrowserTransport implements AgentTransport {
+  async *send(
+    req: AgentRequest,
+    signal?: AbortSignal,
+  ): AsyncGenerator<AgentEvent> {
+    const apiKey = readApiKey();
+    if (!apiKey) {
+      yield {
+        type: "error",
+        message:
+          "No Gemini API key. Open the key settings in the Assistant panel and paste your key.",
+        retryable: false,
+      };
+      return;
+    }
+    yield* streamGemini(req, apiKey, req.model || readModel(), signal);
+  }
+}
+
+/** Headers may be a factory so credentials are read at send time — the user can
+ *  change their session mid-flight without the transport being rebuilt. */
+type HeaderSource = Record<string, string> | (() => Record<string, string>);
+
+/** Gateway mode: POST the request as JSON, receive an NDJSON stream of events. */
 export class HttpTransport implements AgentTransport {
   constructor(
     private url: string,
-    private headers: Record<string, string> = {},
+    private headers: HeaderSource = {},
   ) {}
 
   async *send(
     req: AgentRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
+    const extra =
+      typeof this.headers === "function" ? this.headers() : this.headers;
     const res = await fetch(this.url, {
       method: "POST",
-      headers: { "content-type": "application/json", ...this.headers },
+      headers: { "content-type": "application/json", ...extra },
       body: JSON.stringify(req),
       signal,
     });
@@ -59,9 +97,8 @@ export class HttpTransport implements AgentTransport {
   }
 }
 
-/** Production: the parent system's gateway (holds all provider keys); the
- *  session credential goes in the Authorization header. Development: the
- *  local /api/agent route backed by a key in .env.local. */
+/** Gateway when one is configured, otherwise the user's own key from the
+ *  browser. `sessionToken` only applies to gateway mode. */
 export function createTransport(sessionToken?: string): AgentTransport {
   const gatewayUrl = process.env.NEXT_PUBLIC_AGENT_GATEWAY_URL;
   if (gatewayUrl) {
@@ -70,5 +107,5 @@ export function createTransport(sessionToken?: string): AgentTransport {
       sessionToken ? { authorization: `Bearer ${sessionToken}` } : {},
     );
   }
-  return new HttpTransport("/api/agent");
+  return new GeminiBrowserTransport();
 }
