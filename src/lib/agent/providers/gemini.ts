@@ -218,6 +218,7 @@ type PartialToolCall = {
  *  may legally span several `data:` lines, and non-`data:` lines (`event:`,
  *  `:` comments used as keep-alives) are ignored. */
 function recordPayload(record: string): string {
+  if (!record || typeof record !== "string") return "";
   return record
     .split(/\r?\n/)
     .filter((l) => l.startsWith("data:"))
