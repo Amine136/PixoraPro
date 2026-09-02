@@ -102,7 +102,7 @@ export function useAgent(editor: AgentEditorApi) {
             text: "",
             actions: [],
             error:
-              "Add your Gemini API key first — click the key icon above. It stays in this browser.",
+              "Add your API key first — open Pixora Pro Agent settings from the top bar. It stays in this browser.",
           },
         ]);
         return;

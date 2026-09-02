@@ -5,8 +5,10 @@ import {
   ChevronDown,
   Download,
   Frame,
+  KeyRound,
   Layers,
   Redo2,
+  Settings2,
   SlidersHorizontal,
   Undo2,
   X,
@@ -17,11 +19,13 @@ interface TopBarProps {
   canUndo: boolean;
   canRedo: boolean;
   preset: ArtboardPreset;
+  needsKey: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onPreset: (p: ArtboardPreset) => void;
   onCustomSize: (w: number, h: number) => void;
   onExport: () => void;
+  onOpenSettings: () => void;
 }
 
 function SizeInput({
@@ -67,11 +71,13 @@ export function TopBar({
   canUndo,
   canRedo,
   preset,
+  needsKey,
   onUndo,
   onRedo,
   onPreset,
   onCustomSize,
   onExport,
+  onOpenSettings,
 }: TopBarProps) {
   const isCustom = !ARTBOARD_PRESETS.some((p) => p.label === preset.label);
   const [mobilePresetOpen, setMobilePresetOpen] = useState(false);
@@ -186,6 +192,26 @@ export function TopBar({
 
         {/* History + Export */}
         <div className="flex items-center gap-1 sm:gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            title="Pixora Pro Agent settings"
+            aria-label="Pixora Pro Agent settings"
+            className={`flex size-7 sm:size-8 items-center justify-center rounded-lg transition-colors active:scale-95 ${
+              needsKey
+                ? "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
+                : "text-zinc-400 hover:bg-zinc-800/80 hover:text-zinc-100"
+            }`}
+          >
+            {needsKey ? (
+              <KeyRound className="size-3.5 sm:size-4" />
+            ) : (
+              <Settings2 className="size-3.5 sm:size-4" />
+            )}
+          </button>
+
+          <div className="mx-0.5 sm:mx-1 h-5 sm:h-6 w-px bg-white/[0.08]" aria-hidden />
+
           <button
             type="button"
             onClick={onUndo}

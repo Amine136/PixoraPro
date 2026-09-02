@@ -25,6 +25,20 @@ What makes Pixora unique is its **integrated, multi-layer AI Agent**. Instead of
 
 ---
 
+## 💰 Model Cost Comparison
+
+Each supported model, its output for the same prompt, and the cost of a single agent request:
+
+| Model | Output | Cost / request |
+| :---: | :---: | :---: |
+| **GPT 5.6 Luna** | ![GPT 5.6 Luna](docs/assets/model-gpt-luna.png) | $0.02 |
+| **GPT 5.6 Terra** | ![GPT 5.6 Terra](docs/assets/model-gpt-terra.png) | $0.06 |
+| **GPT 5.6 Sol** | ![GPT 5.6 Sol](docs/assets/model-gpt-sol.png) | $0.13 |
+| **Gemini 3.8** | ![Gemini 3.8](docs/assets/model-gemini-3-8.png) | $0.05 |
+| **Gemini 3.5 Flash Lite** | ![Gemini 3.5 Flash Lite](docs/assets/model-gemini-3-5-flash-lite.png) | < $0.01 |
+
+---
+
 ## 📸 Visual Showcase & Workflow
 
 ### 1. From Raw Product Photo to High-Converting Ad

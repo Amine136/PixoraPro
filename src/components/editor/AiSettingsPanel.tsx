@@ -1,21 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import {
-  Check,
-  Eye,
-  EyeOff,
-  ExternalLink,
-  Loader2,
-  Trash2,
-} from "lucide-react";
+import { Check, ExternalLink, Loader2, Trash2 } from "lucide-react";
 import {
   looksLikeApiKey,
   maskKey,
   PROVIDERS,
   useAiSettings,
+  type ProviderId,
 } from "@/lib/agent/settings";
-import { verifyGeminiKey } from "@/lib/agent/providers/gemini";
+import { verifyKey } from "@/lib/agent/providers";
 
 interface AiSettingsPanelProps {
   /** Called once a key has been saved, so the parent can collapse the panel. */
@@ -32,16 +26,14 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
     hasKey,
     provider,
     providerInfo,
-    model,
     saveApiKey,
     clearApiKey,
-    saveModel,
+    saveProvider,
   } = useAiSettings();
 
   // Starts blank even when a key exists: the stored value is shown masked
   // above, and a blank field makes "replace" unambiguous.
   const [draft, setDraft] = useState("");
-  const [reveal, setReveal] = useState(false);
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +46,7 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
     }
     setChecking(true);
     setError(null);
-    const failure = await verifyGeminiKey(value);
+    const failure = await verifyKey(provider, value);
     setChecking(false);
     if (failure) {
       setError(failure);
@@ -81,9 +73,11 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
         <select
           id="ai-provider"
           value={provider}
-          // One provider today; the control exists so the concept is visible
-          // and adding a second is a registry entry, not a UI change.
-          disabled
+          onChange={(e) => {
+            saveProvider(e.target.value as ProviderId);
+            setDraft("");
+            setError(null);
+          }}
           className={selectClass}
         >
           {Object.values(PROVIDERS).map((p) => (
@@ -92,7 +86,6 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
             </option>
           ))}
         </select>
-        <p className="text-[10px] text-zinc-600">More providers coming.</p>
       </div>
 
       {/* API key */}
@@ -108,21 +101,8 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
           <div className="flex items-center gap-2 rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-2">
             <Check className="size-3.5 shrink-0 text-emerald-400" />
             <span className="flex-1 truncate font-mono text-[11px] text-emerald-100">
-              {reveal ? apiKey : maskKey(apiKey)}
+              {maskKey(apiKey)}
             </span>
-            <button
-              type="button"
-              onClick={() => setReveal((v) => !v)}
-              title={reveal ? "Hide key" : "Show key"}
-              aria-label={reveal ? "Hide key" : "Show key"}
-              className="flex size-6 items-center justify-center rounded-md text-emerald-300/70 transition-colors hover:bg-emerald-500/15 hover:text-emerald-200"
-            >
-              {reveal ? (
-                <EyeOff className="size-3.5" />
-              ) : (
-                <Eye className="size-3.5" />
-              )}
-            </button>
             <button
               type="button"
               onClick={clearApiKey}
@@ -153,7 +133,7 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
                 void submit();
               }
             }}
-            placeholder={hasKey ? "Paste a new key to replace" : "AIza…"}
+            placeholder={hasKey ? "Paste a new key to replace" : providerInfo.keyPlaceholder}
             disabled={checking}
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? "ai-api-key-error" : undefined}
@@ -181,8 +161,9 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
         )}
 
         <p className="text-[10px] leading-relaxed text-zinc-500">
-          Your key is saved only in this browser and sent only to Google — never
-          to our servers. Only you use it, and you can delete it any time.{" "}
+          Your key is saved only in this browser and sent only to{" "}
+          {providerInfo.label} — never to our servers. Only you use it, and you
+          can delete it any time.{" "}
           <a
             href={providerInfo.keyUrl}
             target="_blank"
@@ -192,34 +173,6 @@ export function AiSettingsPanel({ onSaved }: AiSettingsPanelProps) {
             Get a key
             <ExternalLink className="size-2.5" />
           </a>
-        </p>
-      </div>
-
-      {/* Model */}
-      <div className="flex flex-col gap-1.5">
-        <label
-          htmlFor="ai-model"
-          className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500"
-        >
-          Model
-        </label>
-        <select
-          id="ai-model"
-          value={model}
-          onChange={(e) => saveModel(e.target.value)}
-          disabled={!hasKey}
-          className={selectClass}
-        >
-          {providerInfo.models.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.label}
-            </option>
-          ))}
-        </select>
-        <p className="text-[10px] leading-relaxed text-zinc-600">
-          {hasKey
-            ? (providerInfo.models.find((m) => m.id === model)?.hint ?? "")
-            : "Add a key to choose a model."}
         </p>
       </div>
     </div>

@@ -208,8 +208,8 @@ export function ToolRail({
             <button
               type="button"
               onClick={onOpenAgent}
-              title="AI Assistant"
-              aria-label="AI Assistant"
+              title="Pixora Pro Agent"
+              aria-label="Pixora Pro Agent"
               className={`flex size-8 xs:size-9 sm:size-10 shrink-0 items-center justify-center rounded-xl transition-all ${
                 agentBusy
                   ? "bg-indigo-500/30 text-indigo-200 animate-pulse"

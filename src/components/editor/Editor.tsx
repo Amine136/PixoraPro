@@ -11,11 +11,13 @@ import {
   X,
 } from "lucide-react";
 import { useEditor } from "@/lib/editor/useEditor";
+import { useAiSettings } from "@/lib/agent/settings";
 import { TopBar } from "./TopBar";
 import { ToolRail } from "./ToolRail";
 import { LayersPanel } from "./LayersPanel";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { AgentPanel } from "./AgentPanel";
+import { AiSettingsModal } from "./AiSettingsModal";
 
 export default function Editor() {
   const editor = useEditor();
@@ -24,6 +26,9 @@ export default function Editor() {
     null,
   );
   const [agentOpen, setAgentOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { hasKey, loaded: settingsLoaded } = useAiSettings();
+  const needsKey = settingsLoaded && !hasKey;
 
   // Dev-only handle so the agent's canvas tools can be driven from a browser
   // harness (or the console) without spending a model call — see the C2b eval
@@ -97,11 +102,13 @@ export default function Editor() {
         canUndo={editor.canUndo}
         canRedo={editor.canRedo}
         preset={editor.preset}
+        needsKey={needsKey}
         onUndo={() => void editor.undo()}
         onRedo={() => void editor.redo()}
         onPreset={editor.applyPreset}
         onCustomSize={editor.applyCustomSize}
         onExport={editor.exportPNG}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
 
       <ToolRail
@@ -255,11 +262,18 @@ export default function Editor() {
         </div>
       )}
 
-      {/* AI assistant chat */}
+      {/* Pixora Pro Agent chat */}
       <AgentPanel
         editor={editor}
         isOpen={agentOpen}
         onOpenChange={setAgentOpen}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
+
+      {/* AI settings modal */}
+      <AiSettingsModal
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
 
       {/* Zoom pill (responsive position: top-right on mobile/tablet, bottom-center on desktop) */}

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
+  Check,
+  Copy,
   KeyRound,
   Loader2,
   Send,
@@ -13,17 +15,22 @@ import {
 } from "lucide-react";
 import type { EditorApi } from "@/lib/editor/useEditor";
 import { useAgent } from "@/lib/agent/useAgent";
-import { PROVIDERS, DEFAULT_PROVIDER } from "@/lib/agent/settings";
-import { AiSettingsPanel } from "./AiSettingsPanel";
+import { ModelPicker } from "./ModelPicker";
 
 interface AgentPanelProps {
   editor: EditorApi;
   isOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onOpenSettings?: () => void;
 }
 
-export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
-  const { items, busy, confirm, needsKey, model, run, stop, clear } =
+export function AgentPanel({
+  editor,
+  isOpen,
+  onOpenChange,
+  onOpenSettings,
+}: AgentPanelProps) {
+  const { items, busy, confirm, needsKey, run, stop, clear } =
     useAgent(editor);
   const [internalOpen, setInternalOpen] = useState(false);
   const open = isOpen !== undefined ? isOpen : internalOpen;
@@ -32,20 +39,26 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
     onOpenChange?.(val);
   };
   const [draft, setDraft] = useState("");
-  const [keyFormOpen, setKeyFormOpen] = useState(false);
-  // With no key the assistant can't do anything, so the settings form is pinned
-  // open rather than hidden behind an icon the user has to discover.
-  const showKeyForm = keyFormOpen || needsKey;
-  /** Short label for the header, so the user knows what they're spending on. */
-  const modelLabel =
-    PROVIDERS[DEFAULT_PROVIDER].models.find((m) => m.id === model)?.label ??
-    model;
+  const [copiedId, setCopiedId] = useState<number | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [items]);
+
+  const copyText = (id: number, text: string) => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopiedId(id);
+        window.setTimeout(
+          () => setCopiedId((cur) => (cur === id ? null : cur)),
+          1500,
+        );
+      })
+      .catch(() => {});
+  };
 
   const submit = () => {
     const text = draft.trim();
@@ -66,11 +79,11 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
         <button
           type="button"
           onClick={() => setOpen(true)}
-          title={needsKey ? "AI assistant — API key needed" : "AI assistant"}
+          title={needsKey ? "Pixora Pro Agent — API key needed" : "Pixora Pro Agent"}
           className="hidden lg:flex absolute bottom-4 left-20 z-40 items-center gap-2 rounded-xl border border-white/[0.08] bg-zinc-900/60 px-3.5 py-2.5 text-sm font-medium text-indigo-300 shadow-2xl shadow-black/40 backdrop-blur-xl transition-colors hover:bg-zinc-800/80 hover:text-indigo-200"
         >
           <Sparkles className="size-4" />
-          Assistant
+          Pixora Pro Agent
           {needsKey && (
             <KeyRound className="size-3.5 text-amber-400" aria-hidden />
           )}
@@ -90,28 +103,18 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
           <header className="flex items-center gap-2 border-b border-white/[0.06] px-4 py-3">
             <Sparkles className="size-4 shrink-0 text-indigo-400" />
             <h2 className="text-xs font-semibold uppercase tracking-widest text-zinc-400">
-              Assistant
+              Pixora Pro Agent
             </h2>
-            {!needsKey && (
-              <span
-                className="min-w-0 truncate text-[10px] text-zinc-600"
-                title={`Model: ${modelLabel}`}
-              >
-                {modelLabel}
-              </span>
-            )}
+            {!needsKey && <ModelPicker />}
             <button
               type="button"
-              onClick={() => setKeyFormOpen((v) => !v)}
-              title={needsKey ? "Add your Gemini API key" : "AI settings"}
-              aria-label={needsKey ? "Add your Gemini API key" : "AI settings"}
-              aria-expanded={showKeyForm}
+              onClick={onOpenSettings}
+              title={needsKey ? "Add your API key" : "Pixora Pro Agent settings"}
+              aria-label={needsKey ? "Add your API key" : "Pixora Pro Agent settings"}
               className={`ml-auto flex size-6 shrink-0 items-center justify-center rounded-md transition-colors ${
                 needsKey
                   ? "bg-amber-500/15 text-amber-400 hover:bg-amber-500/25"
-                  : showKeyForm
-                    ? "bg-zinc-800/80 text-zinc-300"
-                    : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-300"
+                  : "text-zinc-500 hover:bg-zinc-800/80 hover:text-zinc-300"
               }`}
             >
               <KeyRound className="size-3.5" />
@@ -136,12 +139,6 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
             </button>
           </header>
 
-          {showKeyForm && (
-            <div className="border-b border-white/[0.06] bg-zinc-950/40 px-4 py-3">
-              <AiSettingsPanel onSaved={() => setKeyFormOpen(false)} />
-            </div>
-          )}
-
           <div
             ref={scrollRef}
             className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 py-3"
@@ -150,7 +147,7 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
               <p className="py-6 text-center text-xs leading-relaxed text-zinc-500">
                 {needsKey ? (
                   <>
-                    Add your Gemini API key above to start.
+                    Open Pixora Pro Agent settings to add your API key.
                     <br />
                     It stays in this browser.
                   </>
@@ -167,19 +164,51 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
               item.role === "user" ? (
                 <div
                   key={i}
-                  dir="auto"
-                  className="ml-8 self-end rounded-xl rounded-br-sm bg-indigo-500/20 px-3 py-2 text-xs leading-relaxed text-indigo-100"
+                  className="ml-8 flex items-start justify-end gap-1.5 self-end"
                 >
-                  {item.text}
+                  <button
+                    type="button"
+                    onClick={() => copyText(i, item.text)}
+                    title="Copy"
+                    aria-label="Copy message"
+                    className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100"
+                  >
+                    {copiedId === i ? (
+                      <Check className="size-3.5 text-emerald-400" />
+                    ) : (
+                      <Copy className="size-3.5" />
+                    )}
+                  </button>
+                  <div
+                    dir="auto"
+                    className="select-text rounded-xl rounded-br-sm bg-indigo-500/20 px-3 py-2 text-xs leading-relaxed text-indigo-100"
+                  >
+                    {item.text}
+                  </div>
                 </div>
               ) : (
                 <div key={i} className="mr-4 flex flex-col gap-1.5">
                   {item.text && (
-                    <div
-                      dir="auto"
-                      className="whitespace-pre-wrap rounded-xl rounded-bl-sm bg-zinc-800/70 px-3 py-2 text-xs leading-relaxed text-zinc-200"
-                    >
-                      {item.text}
+                    <div className="flex items-start gap-1.5">
+                      <div
+                        dir="auto"
+                        className="min-w-0 select-text whitespace-pre-wrap rounded-xl rounded-bl-sm bg-zinc-800/70 px-3 py-2 text-xs leading-relaxed text-zinc-200"
+                      >
+                        {item.text}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyText(i, item.text)}
+                        title="Copy"
+                        aria-label="Copy message"
+                        className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md text-zinc-400 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100"
+                      >
+                        {copiedId === i ? (
+                          <Check className="size-3.5 text-emerald-400" />
+                        ) : (
+                          <Copy className="size-3.5" />
+                        )}
+                      </button>
                     </div>
                   )}
                   {item.actions.length > 0 && (
@@ -220,7 +249,7 @@ export function AgentPanel({ editor, isOpen, onOpenChange }: AgentPanelProps) {
                 <TriangleAlert className="mt-0.5 size-4 shrink-0 text-amber-400" />
                 <div className="flex flex-col gap-2">
                   <p className="text-xs leading-relaxed text-amber-100">
-                    The assistant wants to delete {confirm.count} layers. This
+                    The agent wants to delete {confirm.count} layers. This
                     can be undone with a single Ctrl+Z afterwards.
                   </p>
                   <div className="flex gap-2">

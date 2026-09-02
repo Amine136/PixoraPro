@@ -1,6 +1,8 @@
 import type { AgentEvent, AgentRequest } from "./protocol";
+import { streamDeepSeek } from "./providers/deepseek";
 import { streamGemini } from "./providers/gemini";
-import { readApiKey, readModel } from "./settings";
+import { streamOpenAi } from "./providers/openai";
+import { PROVIDERS, readApiKey, readModel, readProvider } from "./settings";
 
 /* The only layer that knows how to reach a model.
  *
@@ -18,25 +20,32 @@ export interface AgentTransport {
   send(req: AgentRequest, signal?: AbortSignal): AsyncGenerator<AgentEvent>;
 }
 
-/** BYOK: straight from this browser to Google, using the key and model the user
- *  chose in the UI. Both are read at send time, so changing either takes effect
- *  on the next message without rebuilding anything. */
-export class GeminiBrowserTransport implements AgentTransport {
+/** BYOK: straight from this browser to the selected provider, using the key and
+ *  model the user chose in the UI. Both are read at send time, so changing
+ *  either takes effect on the next message without rebuilding anything. */
+export class BrowserTransport implements AgentTransport {
   async *send(
     req: AgentRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<AgentEvent> {
+    const provider = readProvider();
     const apiKey = readApiKey();
     if (!apiKey) {
       yield {
         type: "error",
-        message:
-          "No Gemini API key. Open the key settings in the Assistant panel and paste your key.",
+        message: `No ${PROVIDERS[provider].label} API key. Open Pixora Pro Agent settings and paste your key.`,
         retryable: false,
       };
       return;
     }
-    yield* streamGemini(req, apiKey, req.model || readModel(), signal);
+    const model = req.model || readModel();
+    if (provider === "openai") {
+      yield* streamOpenAi(req, apiKey, model, signal);
+    } else if (provider === "deepseek") {
+      yield* streamDeepSeek(req, apiKey, model, signal);
+    } else {
+      yield* streamGemini(req, apiKey, model, signal);
+    }
   }
 }
 
@@ -107,5 +116,5 @@ export function createTransport(sessionToken?: string): AgentTransport {
       sessionToken ? { authorization: `Bearer ${sessionToken}` } : {},
     );
   }
-  return new GeminiBrowserTransport();
+  return new BrowserTransport();
 }

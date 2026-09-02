@@ -12,15 +12,19 @@ import { useCallback, useSyncExternalStore } from "react";
  * key is kept and offers a delete button. */
 
 const STORAGE_KEYS = {
-  key: "pixora.gemini.apiKey",
   model: "pixora.ai.model",
   provider: "pixora.ai.provider",
 } as const;
 
+/** API keys are stored per provider. */
+const keyStorageKey = (provider: ProviderId) => `pixora.ai.apiKey.${provider}`;
+/** The original single-provider build stored the Gemini key here. */
+const LEGACY_GEMINI_KEY = "pixora.gemini.apiKey";
+
 /** Broadcast within the tab; the `storage` event only fires in *other* tabs. */
 const CHANGE_EVENT = "pixora:ai-settings-change";
 
-export type ProviderId = "gemini";
+export type ProviderId = "gemini" | "openai" | "deepseek";
 
 export interface ModelOption {
   id: string;
@@ -34,25 +38,26 @@ export interface ProviderInfo {
   label: string;
   /** Where the user goes to mint a key. */
   keyUrl: string;
+  /** Placeholder shown in the key input (e.g. "AIza…" vs "sk-…"). */
+  keyPlaceholder: string;
   models: ModelOption[];
   defaultModel: string;
 }
 
-/* Only Gemini for now. The registry shape (rather than hardcoded ids) is what
- * lets a second provider be added without touching the transport or the UI. */
 export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
   gemini: {
     id: "gemini",
     label: "Google Gemini",
     keyUrl: "https://aistudio.google.com/apikey",
+    keyPlaceholder: "AIza…",
     // Default is the most capable model, not the cheapest: the agent drives 21
     // tools from screenshots, and a weaker model produces worse designs *and*
     // often burns more rounds getting there. The user pays either way.
-    defaultModel: "gemini-3.7-flash",
+    defaultModel: "gemini-3.8-flash",
     models: [
       {
-        id: "gemini-3.7-flash",
-        label: "Gemini 3.7 Flash",
+        id: "gemini-3.8-flash",
+        label: "Gemini 3.8 Flash",
         hint: "Most capable — best design results",
       },
       {
@@ -67,46 +72,104 @@ export const PROVIDERS: Record<ProviderId, ProviderInfo> = {
       },
     ],
   },
+  openai: {
+    id: "openai",
+    label: "OpenAI",
+    keyUrl: "https://platform.openai.com/api-keys",
+    keyPlaceholder: "sk-…",
+    defaultModel: "gpt-5.5",
+    models: [
+      {
+        id: "gpt-5.5",
+        label: "GPT 5.5",
+        hint: "Most capable — best design results",
+      },
+      {
+        id: "gpt-5.6-luna",
+        label: "GPT 5.6 Luna",
+        hint: "Fastest and cheapest",
+      },
+      {
+        id: "gpt-5.6-terra",
+        label: "GPT 5.6 Terra",
+        hint: "Balanced speed and quality",
+      },
+      {
+        id: "gpt-5.6-sol",
+        label: "GPT 5.6 Sol",
+        hint: "State of the art — most expensive",
+      },
+    ],
+  },
+  deepseek: {
+    id: "deepseek",
+    label: "DeepSeek",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    keyPlaceholder: "sk-…",
+    defaultModel: "deepseek-v4-flash-vision-exp",
+    models: [
+      {
+        id: "deepseek-v4-flash-vision-exp",
+        label: "DeepSeek V4 Flash Vision",
+        hint: "Vision model — best design results",
+      },
+    ],
+  },
 };
 
 export const DEFAULT_PROVIDER: ProviderId = "gemini";
 
-function read(name: keyof typeof STORAGE_KEYS): string {
+function readRaw(name: string): string {
   if (typeof window === "undefined") return "";
   try {
-    return window.localStorage.getItem(STORAGE_KEYS[name])?.trim() ?? "";
+    return window.localStorage.getItem(name)?.trim() ?? "";
   } catch {
     return ""; // storage blocked (private mode / disabled cookies)
   }
 }
 
-function write(name: keyof typeof STORAGE_KEYS, value: string): void {
+function writeRaw(name: string, value: string): void {
   if (typeof window === "undefined") return;
   const trimmed = value.trim();
   try {
-    if (trimmed) window.localStorage.setItem(STORAGE_KEYS[name], trimmed);
-    else window.localStorage.removeItem(STORAGE_KEYS[name]);
+    if (trimmed) window.localStorage.setItem(name, trimmed);
+    else window.localStorage.removeItem(name);
   } catch {
     // ignore: subscribers still get the change event for this session
   }
   window.dispatchEvent(new Event(CHANGE_EVENT));
 }
 
-export function readApiKey(): string {
-  return read("key");
+export function readApiKey(provider: ProviderId = readProvider()): string {
+  const current = readRaw(keyStorageKey(provider));
+  if (current) return current;
+  // Migrate a key saved by the single-provider build.
+  if (provider === "gemini") return readRaw(LEGACY_GEMINI_KEY);
+  return "";
 }
 
-export function writeApiKey(key: string): void {
-  write("key", key);
+export function writeApiKey(
+  key: string,
+  provider: ProviderId = readProvider(),
+): void {
+  writeRaw(keyStorageKey(provider), key);
+  // Drop the legacy slot once the user writes a key under the current build.
+  if (provider === "gemini" && typeof window !== "undefined") {
+    try {
+      window.localStorage.removeItem(LEGACY_GEMINI_KEY);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 export function readProvider(): ProviderId {
-  const stored = read("provider");
+  const stored = readRaw(STORAGE_KEYS.provider);
   return stored in PROVIDERS ? (stored as ProviderId) : DEFAULT_PROVIDER;
 }
 
 export function writeProvider(id: ProviderId): void {
-  write("provider", id);
+  writeRaw(STORAGE_KEYS.provider, id);
 }
 
 /** The selected model, always one the current provider actually offers. A model
@@ -114,19 +177,19 @@ export function writeProvider(id: ProviderId): void {
  *  default rather than being sent to the API, where it would 404. */
 export function readModel(): string {
   const provider = PROVIDERS[readProvider()];
-  const stored = read("model");
+  const stored = readRaw(STORAGE_KEYS.model);
   return provider.models.some((m) => m.id === stored)
     ? stored
     : provider.defaultModel;
 }
 
 export function writeModel(model: string): void {
-  write("model", model);
+  writeRaw(STORAGE_KEYS.model, model);
 }
 
 /** Shape check only — the real test is a call to the provider (see verifyApiKey).
- *  Google issues several key formats (`AIza…`, `AQ.…`), so this stays loose and
- *  only rejects input that cannot be a key at all. */
+ *  Google issues several key formats (`AIza…`, `AQ.…`) and OpenAI uses `sk-…`,
+ *  so this stays loose and only rejects input that cannot be a key at all. */
 export function looksLikeApiKey(key: string): boolean {
   const value = key.trim();
   return value.length >= 20 && !/\s/.test(value);

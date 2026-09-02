@@ -10,40 +10,31 @@ import {
   type StreamChunk,
 } from "./openai-compat";
 
-/* Gemini provider, called straight from the user's browser via Google's
- * OpenAI-compatible endpoint.
- *
- * Browser-direct is the whole point of bring-your-own-key: the user's API key
- * never touches a Pixora server, and no server of ours sits in the path of the
- * canvas screenshots. Google returns permissive CORS headers on this endpoint
- * (verified: the preflight allows `authorization, content-type` from any
- * origin), which is what makes it possible.
- *
- * Streaming (`stream: true`) is used so text appears as it is generated. */
+/* DeepSeek provider, called straight from the user's browser with their own
+ * key. DeepSeek speaks the standard OpenAI chat-completions wire format (the
+ * same one the shared openai-compat helpers target), so this is a thin sibling
+ * of the Gemini provider — only the base URL, error copy and (absence of)
+ * Gemini thought signatures differ. */
 
-const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const MODELS_URL =
-  "https://generativelanguage.googleapis.com/v1beta/openai/models";
+const DEEPSEEK_URL = "https://api.deepseek.com/chat/completions";
+const MODELS_URL = "https://api.deepseek.com/models";
 
 /** Human-readable, actionable failure text. The user owns the key, so an auth
  *  failure is something they can fix — say so instead of dumping a status. */
 export function describeHttpFailure(status: number, body: string): string {
   if (status === 401 || status === 403) {
-    return "Google rejected your API key. Open the key settings to check or replace it.";
+    return "DeepSeek rejected your API key. Open the settings to check or replace it.";
   }
   if (status === 400) {
-    // 400 is ambiguous: an invalid key *and* a malformed request both land
-    // here, so keep the provider's own detail alongside the hint.
-    return `Google rejected the request (400). If you just changed your key or model, check them in the key settings. ${body.slice(0, 300)}`;
+    return `DeepSeek rejected the request (400). If you just changed your key or model, check them in the settings. ${body.slice(0, 300)}`;
   }
   if (status === 429) {
-    return "Your Gemini key is over its quota or rate limit. Wait a moment and try again.";
+    return "Your DeepSeek key is over its quota or rate limit. Wait a moment and try again.";
   }
   if (status === 404) {
-    return "That model isn't available for your key. Pick a different model in the key settings.";
+    return "That model isn't available for your key. Pick a different model in the settings.";
   }
-  return `Gemini error (${status}): ${body.slice(0, 300)}`;
+  return `DeepSeek error (${status}): ${body.slice(0, 300)}`;
 }
 
 /** Network-level failures. From the browser, a blocked request is opaque — an
@@ -51,35 +42,33 @@ export function describeHttpFailure(status: number, body: string): string {
  *  — so name the likely causes rather than guessing one. */
 export function describeNetworkFailure(err: unknown): string {
   if (err instanceof Error && err.name === "AbortError") return "Stopped.";
-  return "Couldn't reach Google. Check your internet connection, and whether an extension or firewall is blocking generativelanguage.googleapis.com.";
+  return "Couldn't reach DeepSeek. Check your internet connection, and whether an extension or firewall is blocking api.deepseek.com.";
 }
 
 /** One cheap authenticated call, used to validate a key the moment the user
  *  pastes it rather than failing on their first real edit. Listing models bills
  *  no tokens. Returns null on success, or a reason on failure. */
-export async function verifyGeminiKey(key: string): Promise<string | null> {
+export async function verifyDeepSeekKey(key: string): Promise<string | null> {
   try {
     const res = await fetch(MODELS_URL, {
       headers: { authorization: `Bearer ${key.trim()}` },
       cache: "no-store",
     });
     if (res.ok) return null;
-    // The upstream body can echo the key back, so it is never shown for auth
-    // failures — describeHttpFailure only forwards detail for a 400.
-    if (res.status === 401 || res.status === 403 || res.status === 400) {
-      return "Google rejected this key. Check that you copied it fully and that the Generative Language API is enabled for its project.";
+    if (res.status === 401 || res.status === 403) {
+      return "DeepSeek rejected this key. Check that you copied it fully and that the account has API access.";
     }
     if (res.status === 429) {
       return "This key is over its rate limit right now. It looks valid — try again shortly.";
     }
-    return `Google returned ${res.status} while checking the key.`;
+    return `DeepSeek returned ${res.status} while checking the key.`;
   } catch (err) {
     return describeNetworkFailure(err);
   }
 }
 
-/** Run one model turn against Gemini, yielding protocol events as they arrive. */
-export async function* streamGemini(
+/** Run one model turn against DeepSeek, yielding protocol events as they arrive. */
+export async function* streamDeepSeek(
   req: AgentRequest,
   apiKey: string,
   model: string,
@@ -87,7 +76,7 @@ export async function* streamGemini(
 ): AsyncGenerator<AgentEvent> {
   let res: Response;
   try {
-    res = await fetch(GEMINI_URL, {
+    res = await fetch(DEEPSEEK_URL, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -96,8 +85,6 @@ export async function* streamGemini(
       body: JSON.stringify({
         model,
         stream: true,
-        stream_options: { include_usage: true },
-        parallel_tool_calls: true,
         messages: toOaiMessages(req.system, req.messages),
         tools: req.tools.map((t) => ({
           type: "function",
@@ -120,7 +107,7 @@ export async function* streamGemini(
     const detail = await res.text().catch(() => "");
     if (process.env.NODE_ENV !== "production") {
       console.error(
-        `[agent/gemini] HTTP ${res.status} for model=${model}:`,
+        `[agent/deepseek] HTTP ${res.status} for model=${model}:`,
         detail.slice(0, 1000),
       );
     }
@@ -135,8 +122,6 @@ export async function* streamGemini(
   const partials = new Map<number, PartialToolCall>();
   let finishReason: string | undefined;
   let sawToolCall = false;
-  let rawToolCalls = 0;
-  let nextIndex = 0;
   let usage: StreamChunk["usage"];
 
   try {
@@ -162,26 +147,12 @@ export async function* streamGemini(
 
       for (const [i, call] of (delta.tool_calls ?? []).entries()) {
         sawToolCall = true;
-        rawToolCalls++;
-        // Prefer the sender's index. When it is missing, a delta carrying a
-        // fresh id/name starts a new call and an arguments-only delta continues
-        // the most recent one — so an unnumbered stream never merges calls.
-        let index: number;
-        if (call.index !== undefined) {
-          index = call.index;
-          nextIndex = Math.max(nextIndex, index + 1);
-        } else if (call.id !== undefined || call.function?.name !== undefined) {
-          index = nextIndex++;
-        } else {
-          index = nextIndex > 0 ? nextIndex - 1 : i;
-        }
+        const index = call.index ?? i;
         const existing = partials.get(index) ?? { id: "", name: "", args: "" };
         partials.set(index, {
           id: call.id ?? existing.id,
           name: call.function?.name ?? existing.name,
           args: existing.args + (call.function?.arguments ?? ""),
-          signature:
-            call.extra_content?.google?.thought_signature ?? existing.signature,
         });
       }
     }
@@ -201,23 +172,16 @@ export async function* streamGemini(
     }
     yield {
       type: "tool_call",
-      // A call with no id can't be answered with a matching tool_result, so
-      // synthesize one rather than sending an empty tool_call_id.
       id: call.id || `call_${index}`,
       name: call.name,
       args,
-      signature: call.signature,
     };
   }
 
-  // Cost visibility during development: cached prompt tokens bill at a steep
-  // discount, so the cache-hit rate — not raw prompt_tokens — decides real cost.
   if (process.env.NODE_ENV !== "production" && usage) {
     const prompt = usage.prompt_tokens ?? 0;
-    const cached = usage.prompt_tokens_details?.cached_tokens ?? 0;
-    const pct = prompt > 0 ? Math.round((cached / prompt) * 100) : 0;
     console.log(
-      `[agent/gemini] model=${model} in=${prompt} (cached=${cached}, ${pct}% hit) out=${usage.completion_tokens ?? 0} tools=${partials.size} rawToolCalls=${rawToolCalls}`,
+      `[agent/deepseek] model=${model} in=${prompt} out=${usage.completion_tokens ?? 0} tools=${partials.size}`,
     );
   }
 
