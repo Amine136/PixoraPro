@@ -12,6 +12,7 @@
  * from this server. */
 
 import { checkRateLimit } from "@/lib/rate-limit";
+import { allowToday } from "@/lib/daily-guard";
 
 /** This route blocks on the upstream service, whose worst case is a Cloud Run
  *  cold start plus segmentation inference. That exceeds the 10s default on
@@ -476,6 +477,18 @@ export async function POST(request: Request) {
       },
       { status: 413 },
     );
+  }
+
+  // Daily guardrails: cap cold boots and billable minutes so the Cloud Run
+  // service stays within the free tier. Checked before any upstream call so a
+  // rejected request never wakes the instance.
+  const gate = await allowToday();
+  if (!gate.allowed) {
+    const reason =
+      gate.reason === "wakeup"
+        ? "Daily background-removal limit reached. Please try again tomorrow."
+        : "Daily background-removal time limit reached. Please try again tomorrow.";
+    return Response.json({ error: reason }, { status: 503 });
   }
 
   const now = Date.now();
