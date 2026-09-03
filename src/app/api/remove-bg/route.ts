@@ -50,9 +50,12 @@ const HEAD_BYTES = 64 * 1024;
 const WARM_WINDOW_MS = 13 * 60 * 1000;
 
 /** Budget for a throwaway probe request before deciding the instance is asleep
- *  (cold start) rather than warm. A warm instance answers almost instantly; a
- *  cold start holds the connection open for ~75s. */
-const PROBE_TIMEOUT_MS = 8_000;
+ *  (cold start) rather than warm. A warm instance answers a 1×1 probe in ~3–9s
+ *  (the first request after an idle spell is the slow one); a cold start holds
+ *  the connection open for ~75s. 20s sits comfortably above the warm case and
+ *  far below the 60s serverless cap, so a warm instance is never misread as
+ *  cold. */
+const PROBE_TIMEOUT_MS = 20_000;
 
 /** Retry-After (seconds) told to the client on a detected cold start. */
 const RETRY_AFTER_SECONDS = 90;
