@@ -1731,7 +1731,11 @@ export function useEditor() {
   const agentRemoveBackground = useCallback(
     async (
       id: string,
-      opts?: { tolerance?: number; mode?: "auto" | "flood" | "ai" },
+      opts?: {
+        tolerance?: number;
+        mode?: "auto" | "flood" | "ai";
+        onStatus?: (message: string) => void;
+      },
     ): Promise<{
       ok: boolean;
       method?: "flood" | "ai";
@@ -1787,7 +1791,7 @@ export function useEditor() {
       if (wantAI) {
         try {
           // Always segment the ORIGINAL pixels, not the flood-eaten ones.
-          const blob = await removeBackgroundAI(src);
+          const blob = await removeBackgroundAI(src, opts?.onStatus);
           nextSrc = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = () => resolve(reader.result as string);
@@ -1847,7 +1851,10 @@ export function useEditor() {
         mode === "ai" ? "Detecting subject…" : "Removing background…",
       );
       try {
-        const res = await agentRemoveBackground(id, { mode });
+        const res = await agentRemoveBackground(id, {
+          mode,
+          onStatus: (msg) => toast.loading(msg, { id: toastId }),
+        });
         if (!res.ok) {
           toast.error(res.error ?? "Background removal failed", { id: toastId });
           return;

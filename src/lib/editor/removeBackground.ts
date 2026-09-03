@@ -189,44 +189,100 @@ async function proxyError(res: Response): Promise<Error> {
   return new Error(detail || `Background removal failed (${res.status}).`);
 }
 
-async function postToProxy(body: FormData): Promise<Blob> {
-  // Prove "human" before touching the paid segmentation service. The server
-  // verifies the token with Cloudflare before forwarding anything upstream.
-  const turnstileToken = await getTurnstileToken();
-  if (turnstileToken === null) {
-    throw new Error(
-      "Couldn't verify you're not a bot. Try again, or disable script blockers for this site.",
-    );
-  }
+/** The proxy answers a detected cold start with a 503 + "warming" marker and a
+ *  Retry-After. We wait that long and retry automatically instead of surfacing
+ *  the 502 the 60s serverless cap would otherwise produce. */
+const WARM_RETRY_MAX_ATTEMPTS = 3;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Parse a "warming up" marker from a non-OK proxy response, without consuming
+ *  the body the error formatter still needs. */
+async function readWarming(
+  res: Response,
+): Promise<{ retryAfter: number } | null> {
+  if (res.status !== 503) return null;
   try {
-    const res = await fetch(PROXY_URL, {
-      method: "POST",
-      headers: { "X-Turnstile-Token": turnstileToken },
-      body,
-      signal: controller.signal,
-    });
-    if (!res.ok) throw await proxyError(res);
-    return await res.blob();
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
+    const data = (await res.clone().json()) as {
+      warming?: boolean;
+      retryAfter?: number;
+    };
+    if (data?.warming === true && typeof data.retryAfter === "number") {
+      return { retryAfter: data.retryAfter };
+    }
+  } catch {
+    // not JSON; treat as an ordinary error
+  }
+  return null;
+}
+
+async function postToProxy(
+  body: FormData,
+  onStatus?: (message: string) => void,
+): Promise<Blob> {
+  for (let attempt = 1; attempt <= WARM_RETRY_MAX_ATTEMPTS; attempt++) {
+    // Prove "human" before touching the paid segmentation service. The server
+    // verifies the token with Cloudflare before forwarding anything upstream.
+    // Tokens are single-use, so each retry fetches a fresh one.
+    const turnstileToken = await getTurnstileToken();
+    if (turnstileToken === null) {
       throw new Error(
-        "Background removal timed out. The service may be starting up — try again.",
+        "Couldn't verify you're not a bot. Try again, or disable script blockers for this site.",
       );
     }
-    throw err;
-  } finally {
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    let res: Response;
+    try {
+      res = await fetch(PROXY_URL, {
+        method: "POST",
+        headers: { "X-Turnstile-Token": turnstileToken },
+        body,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(
+          "Background removal timed out. The service may be starting up — try again.",
+        );
+      }
+      throw err;
+    }
     clearTimeout(timer);
+
+    if (!res.ok) {
+      const warming = await readWarming(res);
+      if (warming && attempt < WARM_RETRY_MAX_ATTEMPTS) {
+        onStatus?.(
+          `Warming up the background remover (~${warming.retryAfter}s)…`,
+        );
+        await delay(warming.retryAfter * 1000);
+        continue;
+      }
+      throw await proxyError(res);
+    }
+
+    return await res.blob();
   }
+
+  throw new Error(
+    "Background removal couldn't start in time. Please try again.",
+  );
 }
 
 /** Serverless AI background removal (rembg / ISNet on Cloud Run), reached
  *  through this app's server so the service credential is never exposed.
  *  Images larger than 1024px on the long edge are scaled down first, preserving
- *  aspect ratio. */
-export async function removeBackgroundAI(src: string): Promise<Blob> {
+ *  aspect ratio. `onStatus`, when given, receives progress notes while a cold
+ *  Cloud Run instance is waking up. */
+export async function removeBackgroundAI(
+  src: string,
+  onStatus?: (message: string) => void,
+): Promise<Blob> {
   let rawBlob: Blob;
 
   if (src.startsWith("data:") || src.startsWith("blob:")) {
@@ -254,7 +310,7 @@ export async function removeBackgroundAI(src: string): Promise<Blob> {
 
   const formData = new FormData();
   formData.append("file", preparedBlob, "image.png");
-  return postToProxy(formData);
+  return postToProxy(formData, onStatus);
 }
 
 /** Fraction of the image border that is already transparent (alpha < 16).

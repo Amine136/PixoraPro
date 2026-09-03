@@ -43,6 +43,24 @@ const MAX_DIMENSION = 4096;
  *  KB, and 64KB is generous even for heavy EXIF/app segments. */
 const HEAD_BYTES = 64 * 1024;
 
+/** Cloud Run scales the service to zero after roughly 15 minutes idle.
+ *  Remembering the last warm moment lets a recently-used instance skip the
+ *  wake-up probe below. */
+const WARM_WINDOW_MS = 13 * 60 * 1000;
+
+/** Budget for a throwaway probe request before deciding the instance is asleep
+ *  (cold start) rather than warm. A warm instance answers almost instantly; a
+ *  cold start holds the connection open for ~75s. */
+const PROBE_TIMEOUT_MS = 8_000;
+
+/** Retry-After (seconds) told to the client on a detected cold start. */
+const RETRY_AFTER_SECONDS = 90;
+
+/** A 1×1 transparent PNG, sent as the probe. A real (tiny) image is used so the
+ *  segmentation model itself loads, not just the HTTP server. */
+const WARMUP_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGNgAAIAAAUAAXpeqz8AAAAASUVORK5CYII=";
+
 function readU16BE(b: Uint8Array, o: number): number {
   return (b[o] << 8) | b[o + 1];
 }
@@ -245,6 +263,105 @@ async function verifyTurnstile(
   }
 }
 
+/** Timestamp of the last upstream call that succeeded — the last moment we know
+ *  the instance was warm. Module-level (per serverless process): enough for
+ *  consecutive requests on the same instance; the probe below covers the rest. */
+let lastWarmAt = 0;
+
+function warmupBody(): FormData {
+  const png = new Uint8Array(Buffer.from(WARMUP_PNG_BASE64, "base64"));
+  const form = new FormData();
+  form.append("file", new File([png], "warmup.png", { type: "image/png" }));
+  return form;
+}
+
+/** Ask the service to remove the background of a throwaway 1×1 image. If it
+ *  answers within PROBE_TIMEOUT_MS the instance is warm; if not it is mid cold
+ *  start — and this very request is what boots it, so the caller only needs to
+ *  tell the client to retry once it is up. */
+async function probeWarm(): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    await fetch(BG_REMOVE_URL, {
+      method: "POST",
+      headers: { "X-Internal-Secret": BG_REMOVE_TOKEN },
+      body: warmupBody(),
+      signal: controller.signal,
+    });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Forward the real request upstream and shape the response. */
+async function forwardRemoval(
+  file: File,
+  sniffed: SniffedImage,
+  ip: string | null,
+): Promise<Response> {
+  const upstreamHeaders: Record<string, string> = {
+    "X-Internal-Secret": BG_REMOVE_TOKEN,
+    // Pass the real caller through so per-IP quota is attributed to the user
+    // rather than to this server.
+    ...(ip ? { "X-Forwarded-For": ip } : {}),
+  };
+  const upstream = new FormData();
+  upstream.append("file", file, `image.${sniffed.format}`);
+
+  let res: Response;
+  try {
+    res = await fetch(BG_REMOVE_URL, {
+      method: "POST",
+      headers: upstreamHeaders,
+      body: upstream,
+    });
+  } catch {
+    return Response.json(
+      { error: "Background removal service is unreachable. Try again shortly." },
+      { status: 502 },
+    );
+  }
+
+  if (!res.ok) {
+    // Relay the upstream body for quota rejections so the UI can tell "you're
+    // out of trials" apart from "the service failed".
+    const detail = await res.text().catch(() => "");
+    let message = detail.slice(0, 300);
+    try {
+      const parsed = JSON.parse(detail) as { detail?: string; error?: string };
+      message = parsed.detail ?? parsed.error ?? message;
+    } catch {
+      // not JSON; use the raw text
+    }
+    if (res.status === 429) {
+      return Response.json(
+        {
+          error:
+            message ||
+            "Background removal limit reached. Please try again later.",
+        },
+        { status: 429 },
+      );
+    }
+    return Response.json(
+      { error: message || `Background removal failed (${res.status}).` },
+      { status: res.status === 401 || res.status === 403 ? 502 : res.status },
+    );
+  }
+
+  lastWarmAt = Date.now();
+  return new Response(res.body, {
+    headers: {
+      "content-type": res.headers.get("content-type") ?? "image/png",
+      "cache-control": "no-store",
+    },
+  });
+}
+
 export async function POST(request: Request) {
   if (!BG_REMOVE_URL || !BG_REMOVE_TOKEN) {
     return Response.json(
@@ -308,13 +425,6 @@ export async function POST(request: Request) {
     );
   }
 
-  const upstreamHeaders: Record<string, string> = {
-    "X-Internal-Secret": BG_REMOVE_TOKEN,
-    // Pass the real caller through so per-IP quota is attributed to the user
-    // rather than to this server.
-    ...(ip ? { "X-Forwarded-For": ip } : {}),
-  };
-
   let file: File;
   try {
     const form = await request.formData();
@@ -368,55 +478,31 @@ export async function POST(request: Request) {
     );
   }
 
-  const upstream = new FormData();
-  upstream.append("file", file, `image.${sniffed.format}`);
-  const upstreamInit: RequestInit = {
-    method: "POST",
-    headers: upstreamHeaders,
-    body: upstream,
-  };
+  const now = Date.now();
+  const recentlyWarm = lastWarmAt !== 0 && now - lastWarmAt < WARM_WINDOW_MS;
 
-  let res: Response;
-  try {
-    res = await fetch(BG_REMOVE_URL, upstreamInit);
-  } catch {
-    return Response.json(
-      { error: "Background removal service is unreachable. Try again shortly." },
-      { status: 502 },
-    );
-  }
-
-  if (!res.ok) {
-    // Relay the upstream body for quota rejections so the UI can tell "you're
-    // out of trials" apart from "the service failed".
-    const detail = await res.text().catch(() => "");
-    let message = detail.slice(0, 300);
-    try {
-      const parsed = JSON.parse(detail) as { detail?: string; error?: string };
-      message = parsed.detail ?? parsed.error ?? message;
-    } catch {
-      // not JSON; use the raw text
-    }
-    if (res.status === 429) {
+  // An idle Cloud Run instance scales to zero, and its ~75s cold start exceeds
+  // this function's 60s serverless cap. Unless we already know the instance is
+  // warm, probe it (the probe doubles as the wake-up call) and, if it is still
+  // booting, ask the client to retry once it is up.
+  if (!recentlyWarm) {
+    const warm = await probeWarm();
+    if (!warm) {
       return Response.json(
         {
           error:
-            message ||
-            "Background removal limit reached. Please try again later.",
+            "Background removal is warming up. Please wait a moment and try again.",
+          warming: true,
+          retryAfter: RETRY_AFTER_SECONDS,
         },
-        { status: 429 },
+        {
+          status: 503,
+          headers: { "Retry-After": String(RETRY_AFTER_SECONDS) },
+        },
       );
     }
-    return Response.json(
-      { error: message || `Background removal failed (${res.status}).` },
-      { status: res.status === 401 || res.status === 403 ? 502 : res.status },
-    );
+    lastWarmAt = Date.now();
   }
 
-  return new Response(res.body, {
-    headers: {
-      "content-type": res.headers.get("content-type") ?? "image/png",
-      "cache-control": "no-store",
-    },
-  });
+  return forwardRemoval(file, sniffed, ip);
 }
