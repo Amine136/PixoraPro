@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Pixora — Vibecraft Editor",
+  title: "PixoraPro",
   description:
     "Browser-based image editor for the Vibecraft AI image platform.",
 };
