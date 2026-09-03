@@ -7,6 +7,90 @@
 
 const PROXY_URL = "/api/remove-bg";
 
+/** Public Cloudflare Turnstile site key. A `NEXT_PUBLIC_` value is inlined into
+ *  the client bundle, which is fine — the site key is not a secret. The secret
+ *  key lives only on the server (route.ts). */
+const TURNSTILE_SITE_KEY =
+  process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY ?? "0x4AAAAAAEmAF6YuTbifeRXK";
+const TURNSTILE_SCRIPT =
+  "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+
+/** Minimal typing for the globals Cloudflare's Turnstile script installs. */
+interface TurnstileApi {
+  render: (el: HTMLElement, opts: Record<string, unknown>) => string;
+  execute: (id?: string, opts?: Record<string, unknown>) => void;
+  remove: (id: string) => void;
+}
+type TurnstileWindow = Window & { turnstile?: TurnstileApi };
+
+/** Load the Turnstile script once and resolve when its API is ready. */
+let turnstilePromise: Promise<boolean> | null = null;
+function loadTurnstile(): Promise<boolean> {
+  if (turnstilePromise) return turnstilePromise;
+  turnstilePromise = new Promise((resolve) => {
+    const w = window as TurnstileWindow;
+    if (w.turnstile) {
+      resolve(true);
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = TURNSTILE_SCRIPT;
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve(true);
+    script.onerror = () => {
+      turnstilePromise = null; // allow a retry on the next attempt
+      resolve(false);
+    };
+    document.head.appendChild(script);
+  });
+  return turnstilePromise;
+}
+
+/** Run an invisible Turnstile challenge and resolve with the single-use token.
+ *  Resolves null if the script can't load or the challenge fails — the caller
+ *  decides whether that is fatal. */
+function getTurnstileToken(): Promise<string | null> {
+  return new Promise((resolve) => {
+    void loadTurnstile().then((loaded) => {
+      const w = window as TurnstileWindow;
+      if (!loaded || !w.turnstile) {
+        resolve(null);
+        return;
+      }
+      const container = document.createElement("div");
+      container.style.display = "none";
+      document.body.appendChild(container);
+
+      const cleanup = () => {
+        try {
+          w.turnstile?.remove(widgetId);
+        } catch {
+          // widget already gone
+        }
+        container.remove();
+      };
+      const widgetId = w.turnstile.render(container, {
+        sitekey: TURNSTILE_SITE_KEY,
+        size: "invisible",
+        callback: (token: string) => {
+          cleanup();
+          resolve(token);
+        },
+        "error-callback": () => {
+          cleanup();
+          resolve(null);
+        },
+        "expired-callback": () => {
+          cleanup();
+          resolve(null);
+        },
+      });
+      w.turnstile.execute(widgetId);
+    });
+  });
+}
+
 const MAX_DIMENSION = 1024;
 
 /** Cloud Run cold-starts a segmentation model, which can take tens of seconds
@@ -105,16 +189,22 @@ async function proxyError(res: Response): Promise<Error> {
   return new Error(detail || `Background removal failed (${res.status}).`);
 }
 
-async function postToProxy(
-  body: FormData | string,
-  json = false,
-): Promise<Blob> {
+async function postToProxy(body: FormData): Promise<Blob> {
+  // Prove "human" before touching the paid segmentation service. The server
+  // verifies the token with Cloudflare before forwarding anything upstream.
+  const turnstileToken = await getTurnstileToken();
+  if (turnstileToken === null) {
+    throw new Error(
+      "Couldn't verify you're not a bot. Try again, or disable script blockers for this site.",
+    );
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     const res = await fetch(PROXY_URL, {
       method: "POST",
-      ...(json ? { headers: { "Content-Type": "application/json" } } : {}),
+      headers: { "X-Turnstile-Token": turnstileToken },
       body,
       signal: controller.signal,
     });
@@ -147,9 +237,12 @@ export async function removeBackgroundAI(src: string): Promise<Blob> {
       const res = await fetch(src);
       rawBlob = await res.blob();
     } catch {
-      // The browser can't read these bytes (CORS); let the service fetch the
-      // URL itself. No downscaling is possible on this path.
-      return postToProxy(JSON.stringify({ image_url: src }), true);
+      // The browser can't read these bytes (usually a CORS block). The server
+      // no longer fetches remote URLs on our behalf (SSRF), so there is no
+      // fallback: report it clearly rather than fail silently.
+      throw new Error(
+        "This image can't be loaded here (its host blocks cross-origin access). Save it and upload the file instead.",
+      );
     }
   } else {
     const res = await fetch(src);
