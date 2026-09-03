@@ -106,9 +106,11 @@ async function allowUpstash(key: string): Promise<DailyGate> {
       [key],
       [String(Date.now()), String(IDLE_TAIL_MS), String(WORK_LIMIT_MS), String(WAKEUP_LIMIT)],
     );
-    if (result === 1) return { allowed: true };
     if (result === -1) return { allowed: false, reason: "wakeup" };
-    return { allowed: false, reason: "work" };
+    if (result === -2) return { allowed: false, reason: "work" };
+    // Any unexpected result (1, null, a Redis error object, etc.) fails open:
+    // a guardrail misconfig must never take the feature down.
+    return { allowed: true };
   } catch {
     // Fail open: a transient Redis outage shouldn't take the feature down.
     return { allowed: true };

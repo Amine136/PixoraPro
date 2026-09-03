@@ -19,6 +19,10 @@ import { allowToday } from "@/lib/daily-guard";
  *  serverless hosts, which would surface as a spurious 504 to the user. */
 export const maxDuration = 60;
 
+/** Pin the Node.js runtime: the probe uses atob/FormData/Blob and the forward
+ *  reads multipart bodies, and maxDuration above is a Node-runtime knob. */
+export const runtime = "nodejs";
+
 const BG_REMOVE_URL = process.env.BG_REMOVE_URL ?? "";
 const BG_REMOVE_TOKEN = process.env.BG_REMOVE_TOKEN ?? "";
 
@@ -273,9 +277,11 @@ async function verifyTurnstile(
 let lastWarmAt = 0;
 
 function warmupBody(): FormData {
-  const png = new Uint8Array(Buffer.from(WARMUP_PNG_BASE64, "base64"));
+  // Decode with atob + Blob (not Node's Buffer/File) so the probe works on any
+  // runtime the route may be bundled for.
+  const bytes = Uint8Array.from(atob(WARMUP_PNG_BASE64), (c) => c.charCodeAt(0));
   const form = new FormData();
-  form.append("file", new File([png], "warmup.png", { type: "image/png" }));
+  form.append("file", new Blob([bytes], { type: "image/png" }), "warmup.png");
   return form;
 }
 
@@ -294,7 +300,11 @@ async function probeWarm(): Promise<boolean> {
       signal: controller.signal,
     });
     return true;
-  } catch {
+  } catch (err) {
+    console.error(
+      "[remove-bg] warm probe failed:",
+      err instanceof Error ? err.message : String(err),
+    );
     return false;
   } finally {
     clearTimeout(timer);
@@ -487,6 +497,7 @@ export async function POST(request: Request) {
   // rejected request never wakes the instance.
   const gate = await allowToday();
   if (!gate.allowed) {
+    console.warn("[remove-bg] daily gate rejected:", gate.reason);
     const reason =
       gate.reason === "wakeup"
         ? "Daily background-removal limit reached. Please try again tomorrow."
@@ -496,6 +507,13 @@ export async function POST(request: Request) {
 
   const now = Date.now();
   const recentlyWarm = lastWarmAt !== 0 && now - lastWarmAt < WARM_WINDOW_MS;
+  if (!recentlyWarm) {
+    console.log(
+      "[remove-bg] probing upstream",
+      new URL(BG_REMOVE_URL).host,
+      "(lastWarmAt stale/absent)",
+    );
+  }
 
   // An idle Cloud Run instance scales to zero, and its ~75s cold start exceeds
   // this function's 60s serverless cap. Unless we already know the instance is
